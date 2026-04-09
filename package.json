@@ -1,0 +1,37 @@
+{
+  "name": "agentchannels",
+  "version": "0.1.0",
+  "description": "Connect Claude Managed Agents to messaging channels",
+  "type": "module",
+  "main": "dist/cli/index.js",
+  "bin": {
+    "ach": "dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli/index.ts",
+    "start": "node dist/cli/index.js",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": ["claude", "slack", "agent", "chatbot", "managed-agents"],
+  "author": "",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@10.7.0",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.87.0",
+    "@inquirer/prompts": "^8.4.1",
+    "@slack/bolt": "^4.7.0",
+    "@slack/web-api": "^7.15.0",
+    "commander": "^14.0.3",
+    "dotenv": "^17.4.1",
+    "typescript": "^6.0.2",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "tsx": "^4.21.0",
+    "vitest": "^4.1.4"
+  }
+}
