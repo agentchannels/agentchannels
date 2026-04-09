@@ -472,36 +472,7 @@ describe("SlackAdapter event listeners", () => {
   });
 
   describe("startStream()", () => {
-    it("uses experimental chat.startStream API when available", async () => {
-      mockClient.chat.startStream.mockResolvedValue({ stream_id: "stream-123" });
-      mockClient.chat.updateStream.mockResolvedValue({ ok: true });
-      mockClient.chat.stopStream.mockResolvedValue({ ok: true });
-
-      const handle = await adapter.startStream("C123", "1234567890.000001");
-
-      expect(mockClient.chat.startStream).toHaveBeenCalledWith({
-        token: "xoxb-test-token",
-        channel: "C123",
-        thread_ts: "1234567890.000001",
-      });
-
-      await handle.update("Partial text");
-      expect(mockClient.chat.updateStream).toHaveBeenCalledWith({
-        token: "xoxb-test-token",
-        stream_id: "stream-123",
-        text: "Partial text",
-      });
-
-      await handle.finish("Complete text");
-      expect(mockClient.chat.stopStream).toHaveBeenCalledWith({
-        token: "xoxb-test-token",
-        stream_id: "stream-123",
-        text: "Complete text",
-      });
-    });
-
-    it("falls back to post+update when startStream is unavailable", async () => {
-      mockClient.chat.startStream.mockRejectedValue(new Error("not_allowed"));
+    it("posts placeholder then updates with streamed text", async () => {
       mockClient.chat.postMessage.mockResolvedValue({ ok: true, ts: "1234567890.111111" });
       mockClient.chat.update.mockResolvedValue({ ok: true });
 

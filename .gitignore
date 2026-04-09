@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 .env
+.env.*
 .env.local
 .env.*.local
 *.log

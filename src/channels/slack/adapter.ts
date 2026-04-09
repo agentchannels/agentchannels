@@ -65,63 +65,36 @@ export class SlackAdapter implements ChannelAdapter {
   }
 
   async startStream(channelId: string, threadId: string): Promise<StreamHandle> {
-    // Use Slack's experimental chat.startStream API for real-time streaming
-    // Falls back to regular post + update if unavailable
-    try {
-      const streamResult = await (this.app.client as any).chat.startStream({
-        token: this.config.botToken,
-        channel: channelId,
-        thread_ts: threadId,
-      });
+    // Post a placeholder message, then update it as text streams in
+    const result = await this.app.client.chat.postMessage({
+      token: this.config.botToken,
+      channel: channelId,
+      thread_ts: threadId,
+      text: "Thinking...",
+    });
 
-      const streamId = streamResult.stream_id;
+    const messageTs = result.ts!;
+    const chan = channelId;
+    const tok = this.config.botToken;
 
-      return {
-        update: async (text: string) => {
-          await (this.app.client as any).chat.updateStream({
-            token: this.config.botToken,
-            stream_id: streamId,
-            text,
-          });
-        },
-        finish: async (text: string) => {
-          await (this.app.client as any).chat.stopStream({
-            token: this.config.botToken,
-            stream_id: streamId,
-            text,
-          });
-        },
-      };
-    } catch {
-      // Fallback: post a placeholder and update it
-      const result = await this.app.client.chat.postMessage({
-        token: this.config.botToken,
-        channel: channelId,
-        thread_ts: threadId,
-        text: "Thinking...",
-      });
-
-      const ts = result.ts!;
-
-      return {
-        update: async (text: string) => {
-          await this.app.client.chat.update({
-            token: this.config.botToken,
-            channel: channelId,
-            ts,
-            text,
-          });
-        },
-        finish: async (text: string) => {
-          await this.app.client.chat.update({
-            token: this.config.botToken,
-            channel: channelId,
-            ts,
-            text,
-          });
-        },
-      };
-    }
+    return {
+      update: async (text: string) => {
+        await this.app.client.chat.update({
+          token: tok,
+          channel: chan,
+          ts: messageTs,
+          text,
+        });
+      },
+      finish: async (text: string) => {
+        await this.app.client.chat.update({
+          token: tok,
+          channel: chan,
+          ts: messageTs,
+          text,
+        });
+      },
+    };
   }
 
   async sendTypingIndicator(channelId: string, _threadId: string): Promise<void> {

@@ -47,19 +47,23 @@ export interface AppLevelTokenResult {
   expires_in: number;
 }
 
-export interface InstallAppResult {
+export interface TokenRotationResult {
   ok: true;
-  app_id: string;
-  /**
-   * Bot token for the installed workspace.
-   * Only available when using tooling tokens / test installs.
-   */
-  bot_token?: string;
+  /** Short-lived access token for API calls */
+  token: string;
+  /** New refresh token (old one is invalidated — must be saved) */
+  refresh_token: string;
+  /** Expiration time (unix timestamp) */
+  exp: number;
+  /** Team info (may be absent for org-level configuration tokens) */
+  team?: { id: string; name: string };
+  /** Bot user ID */
+  bot_user_id?: string;
 }
 
 export interface SlackApiClientOptions {
-  /** Slack Configuration Token (xoxe-...) for app management APIs */
-  configurationToken: string;
+  /** Short-lived access token obtained from tooling.tokens.rotate */
+  accessToken: string;
   /** Override API base URL (useful for testing) */
   apiBase?: string;
 }
@@ -69,19 +73,64 @@ export interface SlackApiClientOptions {
 /**
  * Low-level Slack API client for managing Slack apps programmatically.
  *
+ * Requires an access token obtained by rotating a Configuration Refresh Token
+ * via `SlackApiClient.rotateConfigToken()`.
+ *
  * All methods throw on HTTP-level errors and return the parsed Slack response
  * (which should be checked for `ok: true` / `ok: false`).
  */
 export class SlackApiClient {
-  private readonly configurationToken: string;
+  private readonly accessToken: string;
   private readonly apiBase: string;
 
   constructor(options: SlackApiClientOptions) {
-    if (!options.configurationToken) {
-      throw new Error('Slack Configuration Token is required');
+    if (!options.accessToken) {
+      throw new Error('Access token is required (obtain via SlackApiClient.rotateConfigToken())');
     }
-    this.configurationToken = options.configurationToken;
+    this.accessToken = options.accessToken;
     this.apiBase = options.apiBase ?? SLACK_API_BASE;
+  }
+
+  /**
+   * Exchange a Configuration Refresh Token (xoxe-...) for a short-lived access token.
+   *
+   * IMPORTANT: Each refresh token is single-use. After calling this, the old
+   * refresh token is invalidated. Save the new refresh_token from the response.
+   *
+   * @param refreshToken - The configuration refresh token (xoxe-...)
+   * @param apiBase - Optional API base URL override
+   * @returns Access token + new refresh token
+   */
+  static async rotateConfigToken(
+    refreshToken: string,
+    apiBase: string = SLACK_API_BASE,
+  ): Promise<TokenRotationResult> {
+    const url = `${apiBase}/tooling.tokens.rotate`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ refresh_token: refreshToken }),
+    });
+
+    if (!response.ok) {
+      throw new SlackApiRequestError(
+        `Slack API HTTP error: ${response.status} ${response.statusText}`,
+        'tooling.tokens.rotate',
+      );
+    }
+
+    const data = (await response.json()) as TokenRotationResult | SlackApiError;
+
+    if (!data.ok) {
+      throw new SlackApiRequestError(
+        `Token rotation failed: ${(data as SlackApiError).error}`,
+        'tooling.tokens.rotate',
+        data as SlackApiError,
+      );
+    }
+
+    return data as TokenRotationResult;
   }
 
   // ──────────── apps.manifest.create ────────────
@@ -152,36 +201,10 @@ export class SlackApiClient {
 
   // ──────────── App Installation ────────────
 
-  /**
-   * Install (or request installation of) a Slack app to the workspace
-   * associated with the configuration token.
-   *
-   * This uses the tooling-install endpoint which performs a "test install"
-   * without requiring the full OAuth flow. The app must already be created.
-   *
-   * @param appId - The Slack app ID to install
-   * @returns Install result including optional bot token
-   * @throws {SlackApiRequestError} on HTTP or Slack API errors
-   *
-   * @see https://api.slack.com/methods/tooling.tokens.rotate
-   */
-  async installApp(
-    appId: string,
-  ): Promise<InstallAppResult> {
-    const response = await this.post('tooling.tokens.rotate', {
-      app_id: appId,
-    }) as InstallAppResult | SlackApiError;
-
-    if (!response.ok) {
-      throw new SlackApiRequestError(
-        `Failed to install app to workspace: ${(response as SlackApiError).error}`,
-        'tooling.tokens.rotate',
-        response as SlackApiError,
-      );
-    }
-
-    return response as InstallAppResult;
-  }
+  // Note: Slack app installation requires the full OAuth v2 flow
+  // (redirect to slack.com/oauth/v2/authorize → user approves → redirect back with code).
+  // This cannot be done via a simple API call. The CLI guides the user through
+  // manual installation and collects the bot token interactively.
 
   // ──────────── Helper: POST to Slack API ────────────
 
@@ -202,7 +225,7 @@ export class SlackApiClient {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.configurationToken}`,
+        Authorization: `Bearer ${this.accessToken}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: formData.toString(),

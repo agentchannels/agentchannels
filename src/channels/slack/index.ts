@@ -5,7 +5,7 @@ export type {
   SlackApiClientOptions,
   CreateAppResult,
   AppLevelTokenResult,
-  InstallAppResult,
+  TokenRotationResult,
   SlackApiError,
 } from "./api.js";
 export { SlackPoster } from "./slack-poster.js";

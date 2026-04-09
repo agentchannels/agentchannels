@@ -3,6 +3,7 @@ import { writeEnvFile } from '../../config/env.js';
 import { resolvePartialConfig } from '../../core/config.js';
 import { buildSlackManifest } from './manifest.js';
 import { SlackApiClient, SlackApiRequestError } from './api.js';
+import { addRedirectUrl, runOAuthInstall } from './oauth.js';
 
 /**
  * Result of the Slack init wizard
@@ -89,11 +90,14 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
   let appToken: string;
   let signingSecret: string;
 
+  let newRefreshToken: string | undefined;
+
   if (setupMethod === 'automatic') {
     const credentials = await automaticSetup(appName, appDescription);
     botToken = credentials.botToken;
     appToken = credentials.appToken;
     signingSecret = credentials.signingSecret;
+    newRefreshToken = credentials.newRefreshToken;
   } else {
     if (setupMethod === 'guided') {
       console.log('\n📋 Follow these steps to create your Slack app:\n');
@@ -169,14 +173,15 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
     });
 
     if (shouldWrite) {
-      writeEnvFile(
-        {
-          SLACK_BOT_TOKEN: botToken,
-          SLACK_APP_TOKEN: appToken,
-          SLACK_SIGNING_SECRET: signingSecret,
-        },
-        cwd,
-      );
+      const envVars: Record<string, string> = {
+        SLACK_BOT_TOKEN: botToken,
+        SLACK_APP_TOKEN: appToken,
+        SLACK_SIGNING_SECRET: signingSecret,
+      };
+      if (newRefreshToken) {
+        envVars.SLACK_REFRESH_TOKEN = newRefreshToken;
+      }
+      writeEnvFile(envVars, cwd);
       envWritten = true;
       console.log('\n✅ Slack credentials saved to .env');
     } else {
@@ -209,6 +214,8 @@ interface AutomaticSetupCredentials {
   botToken: string;
   appToken: string;
   signingSecret: string;
+  /** New refresh token from token rotation (old one is invalidated) */
+  newRefreshToken: string;
 }
 
 /**
@@ -230,22 +237,54 @@ export async function automaticSetup(
   appName: string,
   appDescription: string,
 ): Promise<AutomaticSetupCredentials> {
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      return await _automaticSetupAttempt(appName, appDescription);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`\n❌ Slack setup failed: ${message}\n`);
+
+      const retry = await confirm({
+        message: 'Would you like to retry?',
+        default: true,
+      });
+
+      if (!retry) {
+        throw error;
+      }
+      console.log(''); // blank line before retry
+    }
+  }
+}
+
+async function _automaticSetupAttempt(
+  appName: string,
+  appDescription: string,
+): Promise<AutomaticSetupCredentials> {
   console.log('\n🤖 Automatic Setup via Slack API\n');
   console.log('This method uses the Slack Configuration Token API to create your app automatically.');
   console.log('You can generate a Configuration Token at:');
   console.log('  https://api.slack.com/apps → Your Apps → Configuration tokens\n');
 
-  const configToken = await password({
-    message: 'Slack Configuration Token (xoxe-...):',
+  const refreshToken = await password({
+    message: 'Slack Configuration Refresh Token (xoxe-...):',
     validate: (value) => {
-      if (!value.trim()) return 'Configuration token is required';
-      if (!value.startsWith('xoxe-')) return 'Configuration token must start with xoxe-';
+      if (!value.trim()) return 'Refresh token is required';
+      if (!value.startsWith('xoxe-')) return 'Refresh token must start with xoxe-';
       if (value.length < 20) return 'Token appears too short';
       return true;
     },
   });
 
-  const client = new SlackApiClient({ configurationToken: configToken });
+  // Step 0: Exchange refresh token for access token
+  console.log('\n⏳ Rotating configuration token...');
+  const rotationResult = await SlackApiClient.rotateConfigToken(refreshToken);
+  console.log(`   ✅ Token rotated${rotationResult.team?.name ? ` (workspace: ${rotationResult.team.name})` : ''}`);
+  console.log('   ⚠️  Your old refresh token is now invalidated.');
+  console.log(`   📝 New refresh token: ${rotationResult.refresh_token.slice(0, 20)}...`);
+
+  const client = new SlackApiClient({ accessToken: rotationResult.token });
 
   // Step 1: Create app from manifest
   console.log('\n⏳ Creating Slack app from manifest...');
@@ -255,60 +294,52 @@ export async function automaticSetup(
     socketMode: true,
   });
 
-  let createResult;
-  try {
-    createResult = await client.createAppFromManifest(manifest);
-  } catch (error) {
-    if (error instanceof SlackApiRequestError) {
-      console.error(`\n❌ Failed to create app: ${error.message}`);
-      if (error.slackError?.response_metadata?.messages) {
-        for (const msg of error.slackError.response_metadata.messages) {
-          console.error(`   ${msg}`);
-        }
-      }
-    }
-    throw error;
-  }
-
+  const createResult = await client.createAppFromManifest(manifest);
   const appId = createResult.app_id;
   const signingSecret = createResult.credentials.signing_secret;
   console.log(`   ✅ App created: ${appId}`);
 
-  // Step 2: Install app to workspace
-  console.log('⏳ Installing app to workspace...');
-  let installResult;
-  try {
-    installResult = await client.installApp(appId);
-  } catch (error) {
-    if (error instanceof SlackApiRequestError) {
-      console.error(`\n❌ Failed to install app: ${error.message}`);
-    }
-    throw error;
-  }
+  // Step 2: Install app via OAuth flow (automated)
+  const scopes = [
+    'app_mentions:read', 'channels:history', 'channels:read', 'chat:write',
+    'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write',
+    'mpim:history', 'mpim:read', 'users:read',
+  ];
 
-  const botToken = installResult.bot_token;
-  if (!botToken) {
-    throw new Error(
-      'App was installed but no bot token was returned. ' +
-      'You may need to install it manually via OAuth at https://api.slack.com/apps/' + appId,
-    );
-  }
-  console.log('   ✅ App installed to workspace');
+  console.log('⏳ Updating manifest with OAuth redirect URL...');
+  const port = 3333;
+  const redirectUri = `http://localhost:${port}/oauth/callback`;
+  await addRedirectUrl(rotationResult.token, appId, redirectUri);
 
-  // Step 3: Generate app-level token for Socket Mode
-  console.log('⏳ Generating app-level token for Socket Mode...');
-  let tokenResult;
-  try {
-    tokenResult = await client.generateAppLevelToken(appId);
-  } catch (error) {
-    if (error instanceof SlackApiRequestError) {
-      console.error(`\n❌ Failed to generate app-level token: ${error.message}`);
-    }
-    throw error;
-  }
+  console.log('⏳ Installing app to workspace via OAuth...');
+  console.log('   A browser window will open for authorization.');
 
-  const appToken = tokenResult.token;
-  console.log('   ✅ App-level token generated');
+  const installResult = await runOAuthInstall({
+    appId,
+    clientId: createResult.credentials.client_id,
+    clientSecret: createResult.credentials.client_secret,
+    scopes,
+    port,
+  });
+
+  const botToken = installResult.botToken;
+  console.log(`   ✅ App installed to workspace: ${installResult.teamName}`);
+
+  // Step 3: App-level token (must be created manually in Slack UI)
+  console.log('\n📋 One last step — create an App-Level Token:\n');
+  console.log(`   1. Go to https://api.slack.com/apps/${appId}/general`);
+  console.log('   2. Under "App-Level Tokens", click "Generate Token and Scopes"');
+  console.log('   3. Name it (e.g. "socket"), add scope "connections:write", click "Generate"');
+  console.log('   4. Copy the token (starts with xapp-)\n');
+
+  const appToken = await input({
+    message: 'Paste your App-Level Token (xapp-...):',
+    validate: (value) => {
+      if (!value.startsWith('xapp-')) return 'App-level token must start with xapp-';
+      if (value.length < 20) return 'Token appears too short';
+      return true;
+    },
+  });
 
   console.log(`\n🎉 Slack app "${appName}" created and configured successfully!\n`);
 
@@ -316,5 +347,6 @@ export async function automaticSetup(
     botToken,
     appToken,
     signingSecret,
+    newRefreshToken: rotationResult.refresh_token,
   };
 }

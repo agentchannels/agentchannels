@@ -289,9 +289,28 @@ export async function initAgent(options: InitAgentOptions = {}): Promise<void> {
     }
   }
 
-  // Step 4: Execute
+  // Step 4: Execute (with retry on failure)
   console.log("\n⏳ Setting up agent and environment...");
-  const result = await initAgentCore(client, coreOptions);
+  let result: InitAgentResult;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      result = await initAgentCore(client, coreOptions);
+      break;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`\n❌ Failed: ${message}\n`);
+
+      const retry = await confirm({
+        message: "Would you like to retry?",
+        default: true,
+      });
+
+      if (!retry) {
+        throw error;
+      }
+    }
+  }
 
   // Step 5: Write to .env
   const envValues: Record<string, string> = {

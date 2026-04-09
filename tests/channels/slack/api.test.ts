@@ -4,7 +4,6 @@ import {
   SlackApiRequestError,
   type CreateAppResult,
   type AppLevelTokenResult,
-  type InstallAppResult,
   type SlackApiError,
 } from '../../../src/channels/slack/api.js';
 
@@ -56,11 +55,6 @@ const VALID_TOKEN_RESPONSE: AppLevelTokenResult = {
   expires_in: 0,
 };
 
-const VALID_INSTALL_RESPONSE: InstallAppResult = {
-  ok: true,
-  app_id: 'A01TEST',
-  bot_token: 'xoxb-installed-bot-token',
-};
 
 // ────────────────────────── Tests ──────────────────────────
 
@@ -69,7 +63,7 @@ describe('SlackApiClient', () => {
   let client: SlackApiClient;
 
   beforeEach(() => {
-    client = new SlackApiClient({ configurationToken: CONFIG_TOKEN });
+    client = new SlackApiClient({ accessToken: CONFIG_TOKEN });
   });
 
   afterEach(() => {
@@ -80,13 +74,13 @@ describe('SlackApiClient', () => {
 
   describe('constructor and token validation', () => {
     it('throws if configuration token is empty string', () => {
-      expect(() => new SlackApiClient({ configurationToken: '' })).toThrow(
-        'Slack Configuration Token is required',
+      expect(() => new SlackApiClient({ accessToken: '' })).toThrow(
+        'Access token is required',
       );
     });
 
     it('creates client with valid token', () => {
-      const c = new SlackApiClient({ configurationToken: 'xoxe-valid-token' });
+      const c = new SlackApiClient({ accessToken: 'xoxe-valid-token' });
       expect(c).toBeInstanceOf(SlackApiClient);
     });
 
@@ -101,7 +95,7 @@ describe('SlackApiClient', () => {
 
     it('uses custom API base URL when provided', async () => {
       const customClient = new SlackApiClient({
-        configurationToken: CONFIG_TOKEN,
+        accessToken: CONFIG_TOKEN,
         apiBase: 'https://custom.slack.test/api',
       });
 
@@ -143,13 +137,11 @@ describe('SlackApiClient', () => {
       const fetchMock = mockFetchSequence([
         { body: VALID_CREATE_RESPONSE },
         { body: VALID_TOKEN_RESPONSE },
-        { body: VALID_INSTALL_RESPONSE },
       ]);
       vi.stubGlobal('fetch', fetchMock);
 
       await client.createAppFromManifest({});
       await client.generateAppLevelToken('A01TEST');
-      await client.installApp('A01TEST');
 
       for (const call of fetchMock.mock.calls) {
         expect(call[1].method).toBe('POST');
@@ -342,103 +334,30 @@ describe('SlackApiClient', () => {
     });
   });
 
-  // ──────────── installApp ────────────
-
-  describe('installApp', () => {
-    it('installs app and returns result with bot token', async () => {
-      const fetchMock = mockFetch(VALID_INSTALL_RESPONSE);
-      vi.stubGlobal('fetch', fetchMock);
-
-      const result = await client.installApp('A01TEST');
-
-      expect(result.ok).toBe(true);
-      expect(result.app_id).toBe('A01TEST');
-      expect(result.bot_token).toBe('xoxb-installed-bot-token');
-
-      const [url] = fetchMock.mock.calls[0];
-      expect(url).toBe('https://slack.com/api/tooling.tokens.rotate');
-    });
-
-    it('sends app_id in the request body', async () => {
-      const fetchMock = mockFetch(VALID_INSTALL_RESPONSE);
-      vi.stubGlobal('fetch', fetchMock);
-
-      await client.installApp('A99XYZ');
-
-      const body = new URLSearchParams(fetchMock.mock.calls[0][1].body);
-      expect(body.get('app_id')).toBe('A99XYZ');
-    });
-
-    it('handles install result without bot_token', async () => {
-      vi.stubGlobal('fetch', mockFetch({ ok: true, app_id: 'A01TEST' }));
-
-      const result = await client.installApp('A01TEST');
-
-      expect(result.ok).toBe(true);
-      expect(result.bot_token).toBeUndefined();
-    });
-
-    it('throws SlackApiRequestError on install failure', async () => {
-      vi.stubGlobal(
-        'fetch',
-        mockFetch({ ok: false, error: 'not_allowed' }),
-      );
-
-      try {
-        await client.installApp('A01TEST');
-        expect.fail('Should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(SlackApiRequestError);
-        const apiErr = err as SlackApiRequestError;
-        expect(apiErr.method).toBe('tooling.tokens.rotate');
-        expect(apiErr.slackError?.error).toBe('not_allowed');
-        expect(apiErr.message).toContain('Failed to install app');
-      }
-    });
-
-    it('throws on HTTP-level failure', async () => {
-      vi.stubGlobal('fetch', mockFetch({}, 502));
-
-      await expect(client.installApp('A01TEST')).rejects.toThrow(
-        'Slack API HTTP error',
-      );
-    });
-  });
-
   // ──────────── Full creation flow (end-to-end sequence) ────────────
 
-  describe('full automatic creation flow', () => {
-    it('chains create → install → token generation successfully', async () => {
+  describe('full creation flow', () => {
+    it('chains create → token generation successfully', async () => {
       const fetchMock = mockFetchSequence([
         { body: VALID_CREATE_RESPONSE },
-        { body: VALID_INSTALL_RESPONSE },
         { body: VALID_TOKEN_RESPONSE },
       ]);
       vi.stubGlobal('fetch', fetchMock);
 
-      // Step 1: Create app
       const createResult = await client.createAppFromManifest({
         display_information: { name: 'FlowTest' },
       });
       expect(createResult.app_id).toBe('A01TEST');
 
-      // Step 2: Install app using app_id from step 1
-      const installResult = await client.installApp(createResult.app_id);
-      expect(installResult.bot_token).toBe('xoxb-installed-bot-token');
-
-      // Step 3: Generate app-level token using app_id from step 1
       const tokenResult = await client.generateAppLevelToken(createResult.app_id);
       expect(tokenResult.token).toBe('xapp-1-test-token');
 
-      // Verify all 3 calls used correct auth
       for (const call of fetchMock.mock.calls) {
         expect(call[1].headers.Authorization).toBe(`Bearer ${CONFIG_TOKEN}`);
       }
 
-      // Verify call order via URLs
       expect(fetchMock.mock.calls[0][0]).toContain('apps.manifest.create');
-      expect(fetchMock.mock.calls[1][0]).toContain('tooling.tokens.rotate');
-      expect(fetchMock.mock.calls[2][0]).toContain('apps.token.create');
+      expect(fetchMock.mock.calls[1][0]).toContain('apps.token.create');
     });
 
     it('stops flow if app creation fails', async () => {
@@ -449,44 +368,22 @@ describe('SlackApiClient', () => {
         client.createAppFromManifest({}),
       ).rejects.toThrow(SlackApiRequestError);
 
-      // Only 1 call should have been made
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it('stops flow if install fails after creation', async () => {
+    it('stops flow if token generation fails after creation', async () => {
       const fetchMock = mockFetchSequence([
         { body: VALID_CREATE_RESPONSE },
-        { body: { ok: false, error: 'not_allowed' } },
-      ]);
-      vi.stubGlobal('fetch', fetchMock);
-
-      const createResult = await client.createAppFromManifest({});
-      expect(createResult.ok).toBe(true);
-
-      await expect(
-        client.installApp(createResult.app_id),
-      ).rejects.toThrow(SlackApiRequestError);
-
-      // 2 calls: create + install
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-
-    it('stops flow if token generation fails after create+install', async () => {
-      const fetchMock = mockFetchSequence([
-        { body: VALID_CREATE_RESPONSE },
-        { body: VALID_INSTALL_RESPONSE },
         { body: { ok: false, error: 'token_limit_reached' } },
       ]);
       vi.stubGlobal('fetch', fetchMock);
 
       const createResult = await client.createAppFromManifest({});
-      await client.installApp(createResult.app_id);
-
       await expect(
         client.generateAppLevelToken(createResult.app_id),
       ).rejects.toThrow(SlackApiRequestError);
 
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
 });
