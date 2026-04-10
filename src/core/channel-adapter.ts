@@ -223,6 +223,36 @@ export interface ChannelAdapter {
    * @param threadId - The thread context
    */
   sendTypingIndicator?(channelId: string, threadId: string): Promise<void>;
+
+  /**
+   * Post a temporary status message in a thread (e.g., tool use indicators).
+   * Returns a message ID that can be used to update or delete it.
+   *
+   * Optional — if not implemented, status indicators are skipped.
+   *
+   * @param channelId - The channel or conversation
+   * @param threadId - The thread context
+   * @param text - Status text to display
+   * @returns A platform-specific message ID for later update/delete
+   */
+  postStatusMessage?(channelId: string, threadId: string, text: string): Promise<string>;
+
+  /**
+   * Update an existing status message.
+   *
+   * @param channelId - The channel or conversation
+   * @param messageId - The message ID returned by postStatusMessage
+   * @param text - New text content
+   */
+  updateStatusMessage?(channelId: string, messageId: string, text: string): Promise<void>;
+
+  /**
+   * Delete a message by ID (used to clean up status messages).
+   *
+   * @param channelId - The channel or conversation
+   * @param messageId - The message ID to delete
+   */
+  deleteMessage?(channelId: string, messageId: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

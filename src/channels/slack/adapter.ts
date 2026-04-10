@@ -98,8 +98,6 @@ export class SlackAdapter implements ChannelAdapter {
   }
 
   async sendTypingIndicator(channelId: string, _threadId: string): Promise<void> {
-    // Slack typing indicators are per-channel (not per-thread)
-    // This uses the undocumented but widely-used indicator approach
     try {
       await this.app.client.apiCall("chat.meMessage", {
         token: this.config.botToken,
@@ -107,7 +105,38 @@ export class SlackAdapter implements ChannelAdapter {
         text: "_typing…_",
       });
     } catch {
-      // Non-critical — silently ignore failures
+      // Non-critical
+    }
+  }
+
+  async postStatusMessage(channelId: string, threadId: string, text: string): Promise<string> {
+    const result = await this.app.client.chat.postMessage({
+      token: this.config.botToken,
+      channel: channelId,
+      thread_ts: threadId,
+      text,
+    });
+    return result.ts!;
+  }
+
+  async updateStatusMessage(channelId: string, messageId: string, text: string): Promise<void> {
+    await this.app.client.chat.update({
+      token: this.config.botToken,
+      channel: channelId,
+      ts: messageId,
+      text,
+    });
+  }
+
+  async deleteMessage(channelId: string, messageId: string): Promise<void> {
+    try {
+      await this.app.client.chat.delete({
+        token: this.config.botToken,
+        channel: channelId,
+        ts: messageId,
+      });
+    } catch {
+      // Non-critical — message may already be deleted
     }
   }
 

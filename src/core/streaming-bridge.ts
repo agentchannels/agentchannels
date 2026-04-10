@@ -31,6 +31,7 @@ import type { ChannelAdapter, ChannelMessage, StreamHandle } from "./channel-ada
 import type { AgentClient } from "./agent-client.js";
 import { SessionOutputReader } from "./session-output-reader.js";
 import { SessionManager } from "./session-manager.js";
+import { describeToolUse } from "./tool-descriptions.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -361,6 +362,32 @@ export class StreamingBridge {
         },
       );
 
+      // Status message tracking (for tool use / thinking indicators)
+      let statusMessageId: string | undefined;
+      let statusDeleted = false;
+      let textStarted = false;
+
+      const postOrUpdateStatus = async (text: string) => {
+        if (statusDeleted || !this.adapter.postStatusMessage) return;
+        try {
+          if (!statusMessageId) {
+            statusMessageId = await this.adapter.postStatusMessage(channelId, threadId, text);
+          } else if (this.adapter.updateStatusMessage) {
+            await this.adapter.updateStatusMessage(channelId, statusMessageId, text);
+          }
+        } catch {
+          // Non-critical
+        }
+      };
+
+      const deleteStatus = async () => {
+        if (statusDeleted || !statusMessageId) return;
+        statusDeleted = true;
+        if (this.adapter.deleteMessage) {
+          await this.adapter.deleteMessage(channelId, statusMessageId).catch(() => {});
+        }
+      };
+
       // Collect errors from the reader
       reader.on("error", (event) => {
         streamError = event.error;
@@ -369,6 +396,26 @@ export class StreamingBridge {
       // Process text deltas with throttled updates
       reader.on("text_delta", (event) => {
         fullText += event.text;
+        // Delete status message when first text arrives
+        if (!textStarted) {
+          textStarted = true;
+          deleteStatus();
+        }
+      });
+
+      // Show tool use as a status message
+      reader.on("tool_use", (event) => {
+        if (!textStarted) {
+          const description = describeToolUse(event.name, event.input);
+          postOrUpdateStatus(`:hourglass_flowing_sand: Working on it...\n${description}`);
+        }
+      });
+
+      // Show thinking indicator
+      reader.on("thinking", () => {
+        if (!textStarted && !statusMessageId) {
+          postOrUpdateStatus(":thought_balloon: Thinking...");
+        }
       });
 
       // Use a polling approach: start the reader and periodically flush updates
@@ -390,6 +437,7 @@ export class StreamingBridge {
         await reader.start();
       } finally {
         clearInterval(flushInterval);
+        await deleteStatus();
       }
 
       // Send any remaining un-flushed text as a final update before finishing
