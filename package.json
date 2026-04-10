@@ -1,23 +1,40 @@
 {
   "name": "agentchannels",
   "version": "0.1.0",
-  "description": "Connect Claude Managed Agents to messaging channels",
+  "description": "Connect Claude Managed Agents to messaging channels like Slack, Discord, Teams, and more",
   "type": "module",
   "main": "dist/cli/index.js",
   "bin": {
     "ach": "dist/cli/index.js"
   },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "pnpm run build",
     "dev": "tsx src/cli/index.ts",
     "start": "node dist/cli/index.js",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "keywords": ["claude", "slack", "agent", "chatbot", "managed-agents"],
-  "author": "",
+  "keywords": ["claude", "slack", "agent", "chatbot", "managed-agents", "anthropic", "cli"],
+  "author": "AgentChannels",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agentchannels/agentchannels.git"
+  },
+  "homepage": "https://github.com/agentchannels/agentchannels",
+  "bugs": {
+    "url": "https://github.com/agentchannels/agentchannels/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "packageManager": "pnpm@10.7.0",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.87.0",
