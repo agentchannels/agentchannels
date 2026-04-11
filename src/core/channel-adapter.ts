@@ -81,22 +81,22 @@ export type MessageHandler = (message: ChannelMessage) => Promise<void>;
  * If an error occurs mid-stream, call `finish()` with the error message
  * to ensure the user sees feedback rather than a stale "Thinking..." message.
  */
+/** A task step shown in plan-mode streams */
+export interface StreamTask {
+  id: string;
+  text: string;
+  status: "pending" | "in_progress" | "complete" | "error";
+}
+
 export interface StreamHandle {
-  /**
-   * Append a text delta to the streaming message.
-   *
-   * @param delta - New text to append (NOT the full accumulated text)
-   */
+  /** Append a text delta to the streaming message. */
   append(delta: string): Promise<void>;
 
-  /**
-   * Finalize the streaming message. Optionally append a final delta.
-   * After calling `finish()`, no further calls to `append()` should be made.
-   *
-   * @param finalDelta - Optional remaining text to append before closing
-   */
-  finish(finalDelta?: string): Promise<void>;
+  /** Update plan task indicators (thinking, tool use steps). */
+  appendTasks?(tasks: StreamTask[]): Promise<void>;
 
+  /** Finalize the stream with optional final text. */
+  finish(finalText?: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

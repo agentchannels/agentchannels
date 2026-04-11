@@ -321,7 +321,7 @@ export class StreamingBridge {
       };
     }
 
-    // Phase 2: Set loading status
+    // Phase 2: Set loading status and start stream eagerly
     this.emitPhase(threadKey, "stream_start");
 
     if (this.adapter.setStatus) {
@@ -332,6 +332,21 @@ export class StreamingBridge {
     let fullText = "";
     let updateCount = 0;
     let streamError: string | undefined;
+
+    try {
+      stream = await this.adapter.startStream(channelId, threadId);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      await this.sendErrorMessage(channelId, threadId, errorMsg);
+      return {
+        sessionCreated,
+        sessionId,
+        success: false,
+        totalChars: 0,
+        updateCount: 0,
+        error: `Stream start failed: ${errorMsg}`,
+      };
+    }
 
     // Phase 3: Stream agent response
     this.emitPhase(threadKey, "streaming");
@@ -348,54 +363,66 @@ export class StreamingBridge {
         },
       );
 
+      // Task tracking for plan-mode streams
+      type TaskInfo = { id: string; text: string; status: "pending" | "in_progress" | "complete" | "error" };
+      const tasks: TaskInfo[] = [];
+      let taskCounter = 0;
       let textStarted = false;
-      let pendingStreamStart: Promise<void> | undefined;
 
-      const ensureStream = async () => {
-        if (stream) return;
-        try {
-          stream = await this.adapter.startStream(channelId, threadId);
-        } catch (err) {
-          const errorMsg = err instanceof Error ? err.message : String(err);
-          throw new Error(`Stream start failed: ${errorMsg}`);
-        }
+      const sendTasks = () => {
+        if (!stream?.appendTasks || tasks.length === 0) return;
+        stream.appendTasks([...tasks]).catch(() => {});
       };
 
       reader.on("error", (event) => {
         streamError = event.error;
       });
 
-      // Text deltas → start stream lazily, then append directly
+      // Text deltas → append directly to stream
       reader.on("text_delta", (event) => {
         fullText += event.text;
         if (!textStarted) {
           textStarted = true;
+          // Mark all tasks as complete
+          for (const t of tasks) {
+            if (t.status !== "complete") t.status = "complete";
+          }
+          if (tasks.length > 0) sendTasks();
+          // Clear loading status
           if (this.adapter.clearStatus) {
             this.adapter.clearStatus(channelId, threadId).catch(() => {});
           }
-          pendingStreamStart = ensureStream().then(() => {
-            stream!.append(event.text).then(() => updateCount++).catch(() => {});
-          }).catch((err) => {
-            streamError = err instanceof Error ? err.message : String(err);
-          });
-        } else if (stream) {
-          stream.append(event.text).then(() => updateCount++).catch(() => {});
         }
+        stream!.append(event.text).then(() => updateCount++).catch(() => {});
       });
 
-      // Thinking → update loading status
+      // Thinking → add/update thinking task
       reader.on("thinking", () => {
         if (textStarted) return;
+        // Only add thinking task once
+        if (!tasks.find((t) => t.id === "thinking")) {
+          tasks.push({ id: "thinking", text: "Thinking...", status: "in_progress" });
+          sendTasks();
+        }
+        // Also update setStatus for adapters without appendTasks
         if (this.adapter.setStatus) {
           this.adapter.setStatus(channelId, threadId, "Thinking...").catch(() => {});
         }
       });
 
-      // Tool use → update loading status with description
+      // Tool use → complete thinking, add tool task
       reader.on("tool_use", (event) => {
         if (textStarted) return;
+        // Complete thinking task
+        const thinking = tasks.find((t) => t.id === "thinking");
+        if (thinking) thinking.status = "complete";
+        // Add tool task
+        const description = describeToolUse(event.name, event.input);
+        const toolId = `tool_${++taskCounter}`;
+        tasks.push({ id: toolId, text: description, status: "in_progress" });
+        sendTasks();
+        // Also update setStatus
         if (this.adapter.setStatus) {
-          const description = describeToolUse(event.name, event.input);
           this.adapter.setStatus(channelId, threadId, description).catch(() => {});
         }
       });
@@ -408,20 +435,11 @@ export class StreamingBridge {
         }
       }
 
-      // Wait for any pending stream start to complete
-      if (pendingStreamStart) {
-        await pendingStreamStart.catch(() => {});
-      }
-
       // Phase 4: Complete or error
 
       if (streamError) {
         this.emitPhase(threadKey, "error", streamError);
-        if (stream) {
-          await stream.finish(this.formatError(streamError));
-        } else {
-          await this.sendErrorMessage(channelId, threadId, streamError);
-        }
+        await stream.finish(this.formatError(streamError));
         return {
           sessionCreated,
           sessionId,
@@ -433,10 +451,10 @@ export class StreamingBridge {
       }
 
       this.emitPhase(threadKey, "completing");
-      if (stream) {
+      if (fullText.length > 0) {
         await stream.finish();
       } else {
-        await this.adapter.sendMessage(channelId, threadId, this.emptyResponseText);
+        await stream.finish(this.emptyResponseText);
       }
 
       return {

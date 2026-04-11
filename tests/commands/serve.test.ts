@@ -223,9 +223,8 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
-      expect(adapter.sendMessage).toHaveBeenCalledWith(
-        "C123",
-        "thread-001",
+      // Stream is started eagerly, so empty response goes through stream.finish()
+      expect(mockStream.finish).toHaveBeenCalledWith(
         "I received your message but had no response.",
       );
     });
@@ -292,7 +291,7 @@ describe("handleMessage", () => {
   });
 
   describe("error handling", () => {
-    it("sends error via sendMessage when agent throws before any text", async () => {
+    it("sends error via stream.finish when agent throws before any text", async () => {
       const agentClient = createMockAgentClient({
         sendMessage: async function* () {
           throw new Error("Invalid request payload");
@@ -302,10 +301,8 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
-      // Stream is lazy (starts on first text), so error goes via sendMessage
-      expect(adapter.sendMessage).toHaveBeenCalledWith(
-        "C123",
-        "thread-001",
+      // Stream is started eagerly, so error goes through stream.finish()
+      expect(mockStream.finish).toHaveBeenCalledWith(
         expect.stringContaining("Invalid request payload"),
       );
     });
@@ -321,10 +318,11 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
+      // When startStream fails, the error is sent via adapter.sendMessage as fallback
       expect(adapter.sendMessage).toHaveBeenCalledWith(
         "C123",
         "thread-001",
-        expect.stringContaining("Stream start failed"),
+        expect.stringContaining("Stream API unavailable"),
       );
     });
 

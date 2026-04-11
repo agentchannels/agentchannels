@@ -416,10 +416,11 @@ describe("End-to-end flow integration", () => {
 
       await handleMessage(adapter, agentClient as any, sessionManager, makeMessage());
 
-      // No stream created (lazy start), fallback sent via sendMessage
-      expect(adapter.sentMessages.length).toBeGreaterThan(0);
-      const lastMsg = adapter.sentMessages[adapter.sentMessages.length - 1];
-      expect(lastMsg.text).toBe("I received your message but had no response.");
+      // Stream is started eagerly, so fallback goes via stream.finish()
+      const stream = adapter.getStream("C-general", "thread-100");
+      expect(stream).toBeDefined();
+      expect(stream!.finished).toBe(true);
+      expect(stream!.finalDelta).toBe("I received your message but had no response.");
     });
   });
 

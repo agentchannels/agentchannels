@@ -169,15 +169,15 @@ describe("StreamingBridge", () => {
       expect(appendedText + finalDelta).toBe("Hello world!");
     });
 
-    it("sends empty response via sendMessage when agent produces no output", async () => {
+    it("finishes stream with empty response text when agent produces no output", async () => {
       agentClient = makeMockAgentClient({ events: [{ type: "done" }] });
       const bridge = createBridge();
       const result = await bridge.handleMessage(makeMessage());
 
       expect(result.success).toBe(true);
-      expect(adapter.sendMessage).toHaveBeenCalledWith(
-        "C123",
-        "thread-1",
+      // Stream is started eagerly, so empty response goes via stream.finish()
+      expect(streamHandle.finishCalls.length).toBe(1);
+      expect(streamHandle.finishCalls[0]).toBe(
         "I received your message but had no response.",
       );
     });
@@ -188,11 +188,9 @@ describe("StreamingBridge", () => {
       const result = await bridge.handleMessage(makeMessage());
 
       expect(result.success).toBe(true);
-      expect(adapter.sendMessage).toHaveBeenCalledWith(
-        "C123",
-        "thread-1",
-        "No output.",
-      );
+      // Stream is started eagerly, so empty response goes via stream.finish()
+      expect(streamHandle.finishCalls.length).toBe(1);
+      expect(streamHandle.finishCalls[0]).toBe("No output.");
     });
 
     it("reports error when stream start fails on first text", async () => {

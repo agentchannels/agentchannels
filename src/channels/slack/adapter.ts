@@ -4,6 +4,7 @@ import type {
   ChannelMessage,
   MessageHandler,
   StreamHandle,
+  StreamTask,
 } from "../../core/channel-adapter.js";
 
 export interface SlackAdapterConfig {
@@ -68,12 +69,12 @@ export class SlackAdapter implements ChannelAdapter {
     const client = this.app.client as any;
     const tok = this.config.botToken;
 
-    // Slack Agent SDK streaming: startStream → appendStream → stopStream
-    // Uses chunks[] format per https://docs.slack.dev/ai/developing-agents/
+    // Slack Agent SDK streaming with plan mode for task indicators
     const result = await client.chat.startStream({
       token: tok,
       channel: channelId,
       thread_ts: threadId,
+      task_display_mode: "plan",
     });
     const messageTs = result.ts;
 
@@ -84,15 +85,31 @@ export class SlackAdapter implements ChannelAdapter {
           token: tok,
           channel: channelId,
           ts: messageTs,
-          markdown_text: delta,
+          chunks: [{ type: "markdown_text", text: delta }],
         });
       },
-      finish: async (finalDelta?: string) => {
+      appendTasks: async (tasks: StreamTask[]) => {
+        if (tasks.length === 0) return;
+        await client.chat.appendStream({
+          token: tok,
+          channel: channelId,
+          ts: messageTs,
+          chunks: tasks.map((t) => ({
+            type: "task_update",
+            id: t.id,
+            title: t.text,
+            status: t.status,
+          })),
+        });
+      },
+      finish: async (finalText?: string) => {
         await client.chat.stopStream({
           token: tok,
           channel: channelId,
           ts: messageTs,
-          ...(finalDelta ? { markdown_text: finalDelta } : {}),
+          ...(finalText
+            ? { chunks: [{ type: "markdown_text", text: finalText }] }
+            : {}),
         });
       },
     };
@@ -107,7 +124,7 @@ export class SlackAdapter implements ChannelAdapter {
     await client.assistant.threads.setStatus({
       channel_id: channelId,
       thread_ts: threadId,
-      status,
+      status: status,
     });
   }
 

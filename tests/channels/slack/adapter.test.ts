@@ -483,6 +483,7 @@ describe("SlackAdapter event listeners", () => {
         token: "xoxb-test-token",
         channel: "C123",
         thread_ts: "1234567890.000001",
+        task_display_mode: "plan",
       });
 
       await handle.append("Partial");
@@ -490,15 +491,15 @@ describe("SlackAdapter event listeners", () => {
         token: "xoxb-test-token",
         channel: "C123",
         ts: "1234567890.111111",
-        markdown_text: "Partial",
+        chunks: [{ type: "markdown_text", text: "Partial" }],
       });
 
-      await handle.finish("Final delta");
+      await handle.finish("Final text");
       expect(mockClient.chat.stopStream).toHaveBeenCalledWith({
         token: "xoxb-test-token",
         channel: "C123",
         ts: "1234567890.111111",
-        markdown_text: "Final delta",
+        chunks: [{ type: "markdown_text", text: "Final text" }],
       });
     });
 

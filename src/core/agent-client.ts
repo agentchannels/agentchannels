@@ -236,6 +236,15 @@ export class AgentClient {
       });
 
       for await (const event of stream) {
+        if (event.type === "agent.message") {
+          console.log(`[AgentClient] Received agent.message event: ${JSON.stringify(event, undefined, 2)}`);
+        } else if (event.type === "agent.tool_use") {
+    console.log(`\n[Using tool: ${event.name}]`);
+  } else if (event.type === "session.status_idle") {
+    console.log("\n\nAgent finished.");
+    break;
+  }
+
         // Check for abort signal between events
         if (signal?.aborted) {
           yield { type: "error", error: "Stream aborted" };
