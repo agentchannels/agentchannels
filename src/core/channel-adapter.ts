@@ -83,20 +83,20 @@ export type MessageHandler = (message: ChannelMessage) => Promise<void>;
  */
 export interface StreamHandle {
   /**
-   * Update the streaming message with the current accumulated text.
-   * May be throttled by the caller to respect platform rate limits.
+   * Append a text delta to the streaming message.
    *
-   * @param text - The full text accumulated so far (not a delta)
+   * @param delta - New text to append (NOT the full accumulated text)
    */
-  update(text: string): Promise<void>;
+  append(delta: string): Promise<void>;
 
   /**
-   * Finalize the streaming message with the complete response text.
-   * After calling `finish()`, no further calls to `update()` should be made.
+   * Finalize the streaming message. Optionally append a final delta.
+   * After calling `finish()`, no further calls to `append()` should be made.
    *
-   * @param text - The final complete response text
+   * @param finalDelta - Optional remaining text to append before closing
    */
-  finish(text: string): Promise<void>;
+  finish(finalDelta?: string): Promise<void>;
+
 }
 
 // ---------------------------------------------------------------------------
@@ -213,46 +213,22 @@ export interface ChannelAdapter {
   startStream(channelId: string, threadId: string): Promise<StreamHandle>;
 
   /**
-   * Send a typing/processing indicator to signal the bot is working.
+   * Set a loading/processing status in the thread (e.g., "thinking...").
+   * Platform-specific: Slack uses assistant.threads.setStatus.
    *
-   * This is optional — implementations may no-op if the platform doesn't
-   * support typing indicators or if `startStream()` already shows a
-   * placeholder message.
+   * @param channelId - The channel or conversation
+   * @param threadId - The thread context
+   * @param status - Status text to display
+   */
+  setStatus?(channelId: string, threadId: string, status: string): Promise<void>;
+
+  /**
+   * Clear the loading status in the thread.
    *
    * @param channelId - The channel or conversation
    * @param threadId - The thread context
    */
-  sendTypingIndicator?(channelId: string, threadId: string): Promise<void>;
-
-  /**
-   * Post a temporary status message in a thread (e.g., tool use indicators).
-   * Returns a message ID that can be used to update or delete it.
-   *
-   * Optional — if not implemented, status indicators are skipped.
-   *
-   * @param channelId - The channel or conversation
-   * @param threadId - The thread context
-   * @param text - Status text to display
-   * @returns A platform-specific message ID for later update/delete
-   */
-  postStatusMessage?(channelId: string, threadId: string, text: string): Promise<string>;
-
-  /**
-   * Update an existing status message.
-   *
-   * @param channelId - The channel or conversation
-   * @param messageId - The message ID returned by postStatusMessage
-   * @param text - New text content
-   */
-  updateStatusMessage?(channelId: string, messageId: string, text: string): Promise<void>;
-
-  /**
-   * Delete a message by ID (used to clean up status messages).
-   *
-   * @param channelId - The channel or conversation
-   * @param messageId - The message ID to delete
-   */
-  deleteMessage?(channelId: string, messageId: string): Promise<void>;
+  clearStatus?(channelId: string, threadId: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

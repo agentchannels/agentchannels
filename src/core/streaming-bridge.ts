@@ -321,34 +321,20 @@ export class StreamingBridge {
       };
     }
 
-    // Phase 2: Start streaming response
+    // Phase 2: Set loading status
     this.emitPhase(threadKey, "stream_start");
 
-    let stream: StreamHandle | undefined;
-
-    try {
-      stream = await this.adapter.startStream(channelId, threadId);
-    } catch (err) {
-      this.emitPhase(threadKey, "error", "stream_start_failed");
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      await this.sendErrorMessage(channelId, threadId, errorMsg);
-      return {
-        sessionCreated,
-        sessionId,
-        success: false,
-        totalChars: 0,
-        updateCount: 0,
-        error: `Stream start failed: ${errorMsg}`,
-      };
+    if (this.adapter.setStatus) {
+      await this.adapter.setStatus(channelId, threadId, "Thinking...").catch(() => {});
     }
+
+    let stream: StreamHandle | undefined;
+    let fullText = "";
+    let updateCount = 0;
+    let streamError: string | undefined;
 
     // Phase 3: Stream agent response
     this.emitPhase(threadKey, "streaming");
-
-    let fullText = "";
-    let lastUpdateLength = 0;
-    let updateCount = 0;
-    let streamError: string | undefined;
 
     try {
       const reader = new SessionOutputReader(
@@ -362,98 +348,80 @@ export class StreamingBridge {
         },
       );
 
-      // Status message tracking (for tool use / thinking indicators)
-      let statusMessageId: string | undefined;
-      let statusDeleted = false;
       let textStarted = false;
+      let pendingStreamStart: Promise<void> | undefined;
 
-      const postOrUpdateStatus = async (text: string) => {
-        if (statusDeleted || !this.adapter.postStatusMessage) return;
+      const ensureStream = async () => {
+        if (stream) return;
         try {
-          if (!statusMessageId) {
-            statusMessageId = await this.adapter.postStatusMessage(channelId, threadId, text);
-          } else if (this.adapter.updateStatusMessage) {
-            await this.adapter.updateStatusMessage(channelId, statusMessageId, text);
-          }
-        } catch {
-          // Non-critical
+          stream = await this.adapter.startStream(channelId, threadId);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          throw new Error(`Stream start failed: ${errorMsg}`);
         }
       };
 
-      const deleteStatus = async () => {
-        if (statusDeleted || !statusMessageId) return;
-        statusDeleted = true;
-        if (this.adapter.deleteMessage) {
-          await this.adapter.deleteMessage(channelId, statusMessageId).catch(() => {});
-        }
-      };
-
-      // Collect errors from the reader
       reader.on("error", (event) => {
         streamError = event.error;
       });
 
-      // Process text deltas with throttled updates
+      // Text deltas → start stream lazily, then append directly
       reader.on("text_delta", (event) => {
         fullText += event.text;
-        // Delete status message when first text arrives
         if (!textStarted) {
           textStarted = true;
-          deleteStatus();
-        }
-      });
-
-      // Show tool use as a status message
-      reader.on("tool_use", (event) => {
-        if (!textStarted) {
-          const description = describeToolUse(event.name, event.input);
-          postOrUpdateStatus(`:hourglass_flowing_sand: Working on it...\n${description}`);
-        }
-      });
-
-      // Show thinking indicator
-      reader.on("thinking", () => {
-        if (!textStarted && !statusMessageId) {
-          postOrUpdateStatus(":thought_balloon: Thinking...");
-        }
-      });
-
-      // Use a polling approach: start the reader and periodically flush updates
-      // We attach a flush interval that sends accumulated text to the stream
-      const flushInterval = setInterval(async () => {
-        if (fullText.length - lastUpdateLength >= this.updateThreshold) {
-          try {
-            await stream!.update(fullText);
-            updateCount++;
-            lastUpdateLength = fullText.length;
-          } catch {
-            // Update failures are non-fatal; finish() will send final text
+          if (this.adapter.clearStatus) {
+            this.adapter.clearStatus(channelId, threadId).catch(() => {});
           }
+          pendingStreamStart = ensureStream().then(() => {
+            stream!.append(event.text).then(() => updateCount++).catch(() => {});
+          }).catch((err) => {
+            streamError = err instanceof Error ? err.message : String(err);
+          });
+        } else if (stream) {
+          stream.append(event.text).then(() => updateCount++).catch(() => {});
         }
-      }, 50);
+      });
+
+      // Thinking → update loading status
+      reader.on("thinking", () => {
+        if (textStarted) return;
+        if (this.adapter.setStatus) {
+          this.adapter.setStatus(channelId, threadId, "Thinking...").catch(() => {});
+        }
+      });
+
+      // Tool use → update loading status with description
+      reader.on("tool_use", (event) => {
+        if (textStarted) return;
+        if (this.adapter.setStatus) {
+          const description = describeToolUse(event.name, event.input);
+          this.adapter.setStatus(channelId, threadId, description).catch(() => {});
+        }
+      });
 
       try {
-        // Wait for the stream to complete
         await reader.start();
       } finally {
-        clearInterval(flushInterval);
-        await deleteStatus();
+        if (this.adapter.clearStatus) {
+          await this.adapter.clearStatus(channelId, threadId).catch(() => {});
+        }
       }
 
-      // Send any remaining un-flushed text as a final update before finishing
-      if (fullText.length > lastUpdateLength) {
-        try {
-          await stream.update(fullText);
-          updateCount++;
-        } catch {
-          // Non-fatal
-        }
+      // Wait for any pending stream start to complete
+      if (pendingStreamStart) {
+        await pendingStreamStart.catch(() => {});
       }
 
       // Phase 4: Complete or error
+
       if (streamError) {
         this.emitPhase(threadKey, "error", streamError);
-        await stream.finish(this.formatError(streamError));
+        if (stream) {
+          await stream.finish(this.formatError(streamError));
+        } else {
+          await this.sendErrorMessage(channelId, threadId, streamError);
+        }
         return {
           sessionCreated,
           sessionId,
@@ -465,7 +433,11 @@ export class StreamingBridge {
       }
 
       this.emitPhase(threadKey, "completing");
-      await stream.finish(fullText || this.emptyResponseText);
+      if (stream) {
+        await stream.finish();
+      } else {
+        await this.adapter.sendMessage(channelId, threadId, this.emptyResponseText);
+      }
 
       return {
         sessionCreated,
@@ -479,9 +451,11 @@ export class StreamingBridge {
       this.emitPhase(threadKey, "error", "unexpected_stream_error");
       const errorMsg = err instanceof Error ? err.message : String(err);
 
-      // Always finalize the stream handle
+      // Finalize the stream handle, or fall back to sendMessage
       if (stream) {
         await stream.finish(this.formatError(errorMsg)).catch(() => {});
+      } else {
+        await this.sendErrorMessage(channelId, threadId, errorMsg);
       }
 
       return {

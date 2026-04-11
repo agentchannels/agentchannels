@@ -65,79 +65,69 @@ export class SlackAdapter implements ChannelAdapter {
   }
 
   async startStream(channelId: string, threadId: string): Promise<StreamHandle> {
-    // Post a placeholder message, then update it as text streams in
-    const result = await this.app.client.chat.postMessage({
-      token: this.config.botToken,
-      channel: channelId,
-      thread_ts: threadId,
-      text: "Thinking...",
-    });
-
-    const messageTs = result.ts!;
-    const chan = channelId;
+    const client = this.app.client as any;
     const tok = this.config.botToken;
 
+    // Slack Agent SDK streaming: startStream → appendStream → stopStream
+    // Uses chunks[] format per https://docs.slack.dev/ai/developing-agents/
+    const result = await client.chat.startStream({
+      token: tok,
+      channel: channelId,
+      thread_ts: threadId,
+    });
+    const messageTs = result.ts;
+
     return {
-      update: async (text: string) => {
-        await this.app.client.chat.update({
+      append: async (delta: string) => {
+        if (!delta) return;
+        await client.chat.appendStream({
           token: tok,
-          channel: chan,
+          channel: channelId,
           ts: messageTs,
-          text,
+          markdown_text: delta,
         });
       },
-      finish: async (text: string) => {
-        await this.app.client.chat.update({
+      finish: async (finalDelta?: string) => {
+        await client.chat.stopStream({
           token: tok,
-          channel: chan,
+          channel: channelId,
           ts: messageTs,
-          text,
+          ...(finalDelta ? { markdown_text: finalDelta } : {}),
         });
       },
     };
   }
 
-  async sendTypingIndicator(channelId: string, _threadId: string): Promise<void> {
-    try {
-      await this.app.client.apiCall("chat.meMessage", {
-        token: this.config.botToken,
-        channel: channelId,
-        text: "_typing…_",
-      });
-    } catch {
-      // Non-critical
-    }
-  }
-
-  async postStatusMessage(channelId: string, threadId: string, text: string): Promise<string> {
-    const result = await this.app.client.chat.postMessage({
-      token: this.config.botToken,
-      channel: channelId,
+  /**
+   * Set the agent loading status in the thread.
+   * Shows a status indicator with rotating loading messages.
+   */
+  async setStatus(channelId: string, threadId: string, status: string): Promise<void> {
+    const client = this.app.client as any;
+    await client.assistant.threads.setStatus({
+      channel_id: channelId,
       thread_ts: threadId,
-      text,
-    });
-    return result.ts!;
-  }
-
-  async updateStatusMessage(channelId: string, messageId: string, text: string): Promise<void> {
-    await this.app.client.chat.update({
-      token: this.config.botToken,
-      channel: channelId,
-      ts: messageId,
-      text,
+      status,
     });
   }
 
-  async deleteMessage(channelId: string, messageId: string): Promise<void> {
-    try {
-      await this.app.client.chat.delete({
-        token: this.config.botToken,
-        channel: channelId,
-        ts: messageId,
-      });
-    } catch {
-      // Non-critical — message may already be deleted
-    }
+  /**
+   * Clear the agent loading status.
+   */
+  async clearStatus(channelId: string, threadId: string): Promise<void> {
+    await this.setStatus(channelId, threadId, "");
+  }
+
+  /**
+   * Set the thread title (shown in the agent thread UI).
+   */
+  async setTitle(channelId: string, threadId: string, title: string): Promise<void> {
+    const client = this.app.client as any;
+    await client.assistant.threads.setTitle({
+      channel_id: channelId,
+      thread_ts: threadId,
+      title,
+    });
   }
 
   private setupListeners(): void {

@@ -18,7 +18,7 @@ function createMockAdapter(overrides?: Partial<ChannelAdapter>): ChannelAdapter 
     onMessage: vi.fn(),
     sendMessage: vi.fn().mockResolvedValue(undefined),
     startStream: vi.fn().mockResolvedValue({
-      update: vi.fn().mockResolvedValue(undefined),
+      append: vi.fn().mockResolvedValue(undefined),
       finish: vi.fn().mockResolvedValue(undefined),
     }),
     ...overrides,
@@ -70,12 +70,15 @@ describe("handleMessage", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     mockStream = {
-      update: vi.fn().mockResolvedValue(undefined),
+      messageId: "final-ts",
+      append: vi.fn().mockResolvedValue(undefined),
       finish: vi.fn().mockResolvedValue(undefined),
     };
 
     adapter = createMockAdapter({
       startStream: vi.fn().mockResolvedValue(mockStream),
+      setStatus: vi.fn().mockResolvedValue(undefined),
+      clearStatus: vi.fn().mockResolvedValue(undefined),
     });
 
     sessionManager = new SessionManager();
@@ -188,7 +191,7 @@ describe("handleMessage", () => {
   });
 
   describe("response streaming back to Slack", () => {
-    it("concatenates text_delta events and finishes with full text", async () => {
+    it("delivers all text_delta content via append and finish", async () => {
       const agentClient = createMockAgentClient({
         sendMessage: async function* () {
           yield { type: "text_delta", text: "Hello " };
@@ -200,7 +203,14 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
-      expect(mockStream.finish).toHaveBeenCalledWith("Hello world!");
+      // All text must be delivered through append calls + the final finish delta
+      const appendedText = (mockStream.append as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: any[]) => c[0])
+        .join("");
+      const finishCalls = (mockStream.finish as ReturnType<typeof vi.fn>).mock.calls;
+      const finalDelta = finishCalls[0]?.[0] ?? "";
+      expect(appendedText + finalDelta).toBe("Hello world!");
+      expect(mockStream.finish).toHaveBeenCalledTimes(1);
     });
 
     it("sends fallback message when agent returns no text", async () => {
@@ -213,17 +223,18 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
-      expect(mockStream.finish).toHaveBeenCalledWith(
+      expect(adapter.sendMessage).toHaveBeenCalledWith(
+        "C123",
+        "thread-001",
         "I received your message but had no response.",
       );
     });
 
-    it("throttles stream updates to avoid rate limits", async () => {
+    it("appends each text delta directly to the stream", async () => {
       const agentClient = createMockAgentClient({
         sendMessage: async function* () {
-          // Each chunk is 10 chars, need 10 chunks to hit 100-char threshold
-          for (let i = 0; i < 15; i++) {
-            yield { type: "text_delta", text: "0123456789" };
+          for (let i = 0; i < 5; i++) {
+            yield { type: "text_delta", text: "chunk" };
           }
           yield { type: "done" };
         },
@@ -232,11 +243,9 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
-      // 150 chars total. Updates at 100 chars, then finish at end.
-      // update calls should be limited (not every chunk triggers an update)
-      const updateCalls = (mockStream.update as ReturnType<typeof vi.fn>).mock.calls;
-      expect(updateCalls.length).toBeLessThan(15); // Not every chunk
-      expect(updateCalls.length).toBeGreaterThanOrEqual(1); // At least one intermediate update
+      const appendCalls = (mockStream.append as ReturnType<typeof vi.fn>).mock.calls;
+      expect(appendCalls.length).toBe(5);
+      expect(appendCalls.every((c: any[]) => c[0] === "chunk")).toBe(true);
       expect(mockStream.finish).toHaveBeenCalledTimes(1);
     });
 
@@ -254,13 +263,12 @@ describe("handleMessage", () => {
       expect(mockStream.finish).toHaveBeenCalledWith(expect.stringContaining("Context window exceeded"));
     });
 
-    it("ignores non-text events (thinking, tool_use, status)", async () => {
+    it("final stream contains only text deltas, not thinking or tool events", async () => {
       const agentClient = createMockAgentClient({
         sendMessage: async function* () {
           yield { type: "thinking" };
           yield { type: "text_delta", text: "Hello" };
           yield { type: "tool_use", name: "search", input: {} };
-          yield { type: "status", status: "running" };
           yield { type: "text_delta", text: " there" };
           yield { type: "done" };
         },
@@ -269,12 +277,22 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
-      expect(mockStream.finish).toHaveBeenCalledWith("Hello there");
+      // Final stream should contain only text deltas
+      const appendedText = (mockStream.append as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: any[]) => c[0])
+        .join("");
+      const finishCalls = (mockStream.finish as ReturnType<typeof vi.fn>).mock.calls;
+      const finalDelta = finishCalls[0]?.[0] ?? "";
+      const fullOutput = appendedText + finalDelta;
+      expect(fullOutput).toContain("Hello");
+      expect(fullOutput).toContain(" there");
+      expect(fullOutput).not.toContain("Thinking");
+      expect(fullOutput).not.toContain("search");
     });
   });
 
   describe("error handling", () => {
-    it("finishes stream with error message when agent throws", async () => {
+    it("sends error via sendMessage when agent throws before any text", async () => {
       const agentClient = createMockAgentClient({
         sendMessage: async function* () {
           throw new Error("Invalid request payload");
@@ -284,7 +302,10 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
-      expect(mockStream.finish).toHaveBeenCalledWith(
+      // Stream is lazy (starts on first text), so error goes via sendMessage
+      expect(adapter.sendMessage).toHaveBeenCalledWith(
+        "C123",
+        "thread-001",
         expect.stringContaining("Invalid request payload"),
       );
     });
@@ -292,6 +313,8 @@ describe("handleMessage", () => {
     it("falls back to sendMessage when stream setup fails", async () => {
       adapter = createMockAdapter({
         startStream: vi.fn().mockRejectedValue(new Error("Stream API unavailable")),
+        setStatus: vi.fn().mockResolvedValue(undefined),
+        clearStatus: vi.fn().mockResolvedValue(undefined),
       });
       const agentClient = createMockAgentClient();
       const message = createMessage();
@@ -301,13 +324,13 @@ describe("handleMessage", () => {
       expect(adapter.sendMessage).toHaveBeenCalledWith(
         "C123",
         "thread-001",
-        expect.stringContaining("Stream API unavailable"),
+        expect.stringContaining("Stream start failed"),
       );
     });
 
     it("does not throw when stream finish fails during error recovery", async () => {
       const failingStream: StreamHandle = {
-        update: vi.fn().mockResolvedValue(undefined),
+        append: vi.fn().mockResolvedValue(undefined),
         finish: vi.fn().mockRejectedValue(new Error("Stream already closed")),
       };
       adapter = createMockAdapter({

@@ -14,7 +14,7 @@ const mockClient = {
     postMessage: vi.fn(),
     update: vi.fn(),
     startStream: vi.fn(),
-    updateStream: vi.fn(),
+    appendStream: vi.fn(),
     stopStream: vi.fn(),
   },
   apiCall: vi.fn(),
@@ -472,41 +472,57 @@ describe("SlackAdapter event listeners", () => {
   });
 
   describe("startStream()", () => {
-    it("posts placeholder then updates with streamed text", async () => {
-      mockClient.chat.postMessage.mockResolvedValue({ ok: true, ts: "1234567890.111111" });
-      mockClient.chat.update.mockResolvedValue({ ok: true });
+    it("starts a stream, appends deltas with chunks format, and stops", async () => {
+      mockClient.chat.startStream.mockResolvedValue({ ok: true, ts: "1234567890.111111" });
+      mockClient.chat.appendStream.mockResolvedValue({ ok: true });
+      mockClient.chat.stopStream.mockResolvedValue({ ok: true });
 
       const handle = await adapter.startStream("C123", "1234567890.000001");
 
-      // Should have posted a "Thinking..." placeholder
-      expect(mockClient.chat.postMessage).toHaveBeenCalledWith({
+      expect(mockClient.chat.startStream).toHaveBeenCalledWith({
         token: "xoxb-test-token",
         channel: "C123",
         thread_ts: "1234567890.000001",
-        text: "Thinking...",
       });
 
-      await handle.update("Partial");
-      expect(mockClient.chat.update).toHaveBeenCalledWith({
+      await handle.append("Partial");
+      expect(mockClient.chat.appendStream).toHaveBeenCalledWith({
         token: "xoxb-test-token",
         channel: "C123",
         ts: "1234567890.111111",
-        text: "Partial",
+        markdown_text: "Partial",
       });
 
-      await handle.finish("Final text");
-      expect(mockClient.chat.update).toHaveBeenCalledWith({
+      await handle.finish("Final delta");
+      expect(mockClient.chat.stopStream).toHaveBeenCalledWith({
         token: "xoxb-test-token",
         channel: "C123",
         ts: "1234567890.111111",
-        text: "Final text",
+        markdown_text: "Final delta",
       });
     });
-  });
 
-  describe("sendTypingIndicator()", () => {
-    it("is defined as an optional method", () => {
-      expect(typeof adapter.sendTypingIndicator).toBe("function");
+    it("calls stopStream without markdown_text when finish() has no final delta", async () => {
+      mockClient.chat.startStream.mockResolvedValue({ ok: true, ts: "1234567890.111111" });
+      mockClient.chat.stopStream.mockResolvedValue({ ok: true });
+
+      const handle = await adapter.startStream("C123", "1234567890.000001");
+
+      await handle.finish();
+      expect(mockClient.chat.stopStream).toHaveBeenCalledWith({
+        token: "xoxb-test-token",
+        channel: "C123",
+        ts: "1234567890.111111",
+      });
+    });
+
+    it("skips appendStream when delta is empty", async () => {
+      mockClient.chat.startStream.mockResolvedValue({ ok: true, ts: "1234567890.111111" });
+
+      const handle = await adapter.startStream("C123", "1234567890.000001");
+
+      await handle.append("");
+      expect(mockClient.chat.appendStream).not.toHaveBeenCalled();
     });
   });
 
@@ -529,26 +545,6 @@ describe("SlackAdapter event listeners", () => {
     });
   });
 
-  describe("sendTypingIndicator()", () => {
-    it("does not throw on API failure", async () => {
-      mockClient.apiCall.mockRejectedValue(new Error("api_error"));
-
-      // Should not throw
-      await adapter.sendTypingIndicator!("C123", "T456");
-    });
-
-    it("calls chat.meMessage on the correct channel", async () => {
-      mockClient.apiCall.mockResolvedValue({ ok: true });
-
-      await adapter.sendTypingIndicator!("C123CHANNEL", "T456");
-
-      expect(mockClient.apiCall).toHaveBeenCalledWith("chat.meMessage", {
-        token: "xoxb-test-token",
-        channel: "C123CHANNEL",
-        text: "_typing…_",
-      });
-    });
-  });
 
   describe("message normalization edge cases", () => {
     it("normalizes DM thread correctly (uses ts as threadId for root DMs)", async () => {

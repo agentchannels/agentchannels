@@ -222,6 +222,9 @@ export class AgentClient {
     }
 
     try {
+      // Open SSE stream to receive agent events
+      const stream = await this.client.beta.sessions.events.stream(sessionId);
+
       // Send the user message event
       await this.client.beta.sessions.events.send(sessionId, {
         events: [
@@ -231,9 +234,6 @@ export class AgentClient {
           },
         ],
       });
-
-      // Open SSE stream to receive agent events
-      const stream = await this.client.beta.sessions.events.stream(sessionId);
 
       for await (const event of stream) {
         // Check for abort signal between events

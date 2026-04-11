@@ -23,17 +23,17 @@ function makeMessage(overrides: Partial<ChannelMessage> = {}): ChannelMessage {
 }
 
 function makeMockStreamHandle(): StreamHandle & {
-  updateCalls: string[];
-  finishCalls: string[];
+  appendCalls: string[];
+  finishCalls: Array<string | undefined>;
 } {
   const handle = {
-    updateCalls: [] as string[],
-    finishCalls: [] as string[],
-    update: vi.fn().mockImplementation(async (text: string) => {
-      handle.updateCalls.push(text);
+    appendCalls: [] as string[],
+    finishCalls: [] as Array<string | undefined>,
+    append: vi.fn().mockImplementation(async (delta: string) => {
+      handle.appendCalls.push(delta);
     }),
-    finish: vi.fn().mockImplementation(async (text: string) => {
-      handle.finishCalls.push(text);
+    finish: vi.fn().mockImplementation(async (finalDelta?: string) => {
+      handle.finishCalls.push(finalDelta);
     }),
   };
   return handle;
@@ -155,7 +155,7 @@ describe("StreamingBridge", () => {
   // --- Streaming lifecycle ---
 
   describe("streaming lifecycle", () => {
-    it("starts a stream and finishes with accumulated text", async () => {
+    it("starts a stream and delivers all text via append + finish", async () => {
       const bridge = createBridge();
       const result = await bridge.handleMessage(makeMessage());
 
@@ -163,16 +163,21 @@ describe("StreamingBridge", () => {
       expect(result.totalChars).toBe(12); // "Hello world!"
       expect(adapter.startStream).toHaveBeenCalledWith("C123", "thread-1");
       expect(streamHandle.finishCalls.length).toBe(1);
-      expect(streamHandle.finishCalls[0]).toBe("Hello world!");
+      // All text delivered through append deltas + finish's final delta
+      const appendedText = streamHandle.appendCalls.join("");
+      const finalDelta = streamHandle.finishCalls[0] ?? "";
+      expect(appendedText + finalDelta).toBe("Hello world!");
     });
 
-    it("sends empty response text when agent produces no output", async () => {
+    it("sends empty response via sendMessage when agent produces no output", async () => {
       agentClient = makeMockAgentClient({ events: [{ type: "done" }] });
       const bridge = createBridge();
       const result = await bridge.handleMessage(makeMessage());
 
       expect(result.success).toBe(true);
-      expect(streamHandle.finishCalls[0]).toBe(
+      expect(adapter.sendMessage).toHaveBeenCalledWith(
+        "C123",
+        "thread-1",
         "I received your message but had no response.",
       );
     });
@@ -183,17 +188,20 @@ describe("StreamingBridge", () => {
       const result = await bridge.handleMessage(makeMessage());
 
       expect(result.success).toBe(true);
-      expect(streamHandle.finishCalls[0]).toBe("No output.");
+      expect(adapter.sendMessage).toHaveBeenCalledWith(
+        "C123",
+        "thread-1",
+        "No output.",
+      );
     });
 
-    it("reports error when stream start fails", async () => {
+    it("reports error when stream start fails on first text", async () => {
       (adapter.startStream as any).mockRejectedValue(new Error("Slack API down"));
       const bridge = createBridge();
       const result = await bridge.handleMessage(makeMessage());
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("Stream start failed");
-      expect(adapter.sendMessage).toHaveBeenCalled();
     });
   });
 
@@ -473,8 +481,12 @@ describe("StreamingBridge", () => {
 
       expect(result.success).toBe(true);
       expect(result.totalChars).toBe(200);
-      // finish should be called with full text
-      expect(streamHandle.finishCalls[0]).toBe(longText);
+      // Text should have been flushed via append, finish receives only remaining delta (if any)
+      expect(streamHandle.finishCalls.length).toBe(1);
+      // All text should have been delivered via append + finish combined
+      const appendedText = streamHandle.appendCalls.join("");
+      const finalDelta = streamHandle.finishCalls[0] ?? "";
+      expect(appendedText + finalDelta).toBe(longText);
     });
   });
 });

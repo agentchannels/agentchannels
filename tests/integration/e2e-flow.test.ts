@@ -27,10 +27,14 @@ import { handleMessage } from "../../src/commands/serve.js";
 // inspect outbound messages/streams without any Slack dependency.
 
 interface FakeStreamHandle extends StreamHandle {
-  /** All texts passed to update(), in order */
-  updates: string[];
-  /** The final text passed to finish() */
-  finalText: string | undefined;
+  /** All deltas passed to append(), in order */
+  appendedDeltas: string[];
+  /** The final delta passed to finish(), if any */
+  finalDelta: string | undefined;
+  /** Whether finish() has been called */
+  finished: boolean;
+  /** Computed full text (all appended deltas + final delta) */
+  readonly fullText: string;
 }
 
 class FakeAdapter implements ChannelAdapter {
@@ -60,13 +64,18 @@ class FakeAdapter implements ChannelAdapter {
 
   async startStream(channelId: string, threadId: string): Promise<StreamHandle> {
     const handle: FakeStreamHandle = {
-      updates: [],
-      finalText: undefined,
-      update: async (text: string) => {
-        handle.updates.push(text);
+      appendedDeltas: [],
+      finalDelta: undefined,
+      finished: false,
+      get fullText() {
+        return this.appendedDeltas.join("") + (this.finalDelta ?? "");
       },
-      finish: async (text: string) => {
-        handle.finalText = text;
+      append: async (delta: string) => {
+        handle.appendedDeltas.push(delta);
+      },
+      finish: async (finalDelta?: string) => {
+        handle.finalDelta = finalDelta;
+        handle.finished = true;
       },
     };
     this.streams.set(`${channelId}:${threadId}`, handle);
@@ -184,7 +193,7 @@ describe("End-to-end flow integration", () => {
       // The response was streamed back to the correct channel/thread
       const stream = adapter.getStream("C-general", "thread-100");
       expect(stream).toBeDefined();
-      expect(stream!.finalText).toBe("Hello from the agent!");
+      expect(stream!.fullText).toBe("Hello from the agent!");
     });
   });
 
@@ -261,7 +270,7 @@ describe("End-to-end flow integration", () => {
 
       const stream = adapter.getStream("C-general", "thread-100");
       expect(stream).toBeDefined();
-      expect(stream!.finalText).toBe("TypeScript is a typed superset of JavaScript.");
+      expect(stream!.fullText).toBe("TypeScript is a typed superset of JavaScript.");
     });
   });
 
@@ -278,7 +287,7 @@ describe("End-to-end flow integration", () => {
 
       const stream = adapter.getStream("C-general", "thread-100");
       expect(stream).toBeDefined();
-      expect(stream!.finalText).toContain("Context window exceeded");
+      expect(stream!.fullText).toContain("Context window exceeded");
     });
   });
 
@@ -392,8 +401,8 @@ describe("End-to-end flow integration", () => {
       expect(sessionManager.size).toBe(2);
 
       // Both got responses streamed back
-      expect(adapter.getStream("C-public", "thread-mention")?.finalText).toBe("Hello from the agent!");
-      expect(adapter.getStream("D-alice", "thread-dm")?.finalText).toBe("Hello from the agent!");
+      expect(adapter.getStream("C-public", "thread-mention")?.fullText).toBe("Hello from the agent!");
+      expect(adapter.getStream("D-alice", "thread-dm")?.fullText).toBe("Hello from the agent!");
     });
   });
 
@@ -407,9 +416,10 @@ describe("End-to-end flow integration", () => {
 
       await handleMessage(adapter, agentClient as any, sessionManager, makeMessage());
 
-      const stream = adapter.getStream("C-general", "thread-100");
-      expect(stream).toBeDefined();
-      expect(stream!.finalText).toBe("I received your message but had no response.");
+      // No stream created (lazy start), fallback sent via sendMessage
+      expect(adapter.sentMessages.length).toBeGreaterThan(0);
+      const lastMsg = adapter.sentMessages[adapter.sentMessages.length - 1];
+      expect(lastMsg.text).toBe("I received your message but had no response.");
     });
   });
 
@@ -428,7 +438,7 @@ describe("End-to-end flow integration", () => {
       // Verify the full pipeline executed
       expect(sessionManager.size).toBe(1);
       expect(agentClient.receivedMessages.get("test-session-1")).toEqual(["ping"]);
-      expect(adapter.getStream("C-general", "thread-100")?.finalText).toBe("Hello from the agent!");
+      expect(adapter.getStream("C-general", "thread-100")?.fullText).toBe("Hello from the agent!");
     });
   });
 });

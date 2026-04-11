@@ -30,7 +30,7 @@ function createMockAdapter(overrides: Partial<ChannelAdapter> = {}): ChannelAdap
     }),
     sendMessage: vi.fn(async () => {}),
     startStream: vi.fn(async (): Promise<StreamHandle> => ({
-      update: vi.fn(async () => {}),
+      append: vi.fn(async () => {}),
       finish: vi.fn(async () => {}),
     })),
     ...overrides,
@@ -120,66 +120,64 @@ describe("ChannelAdapter interface contract", () => {
   });
 
   describe("startStream()", () => {
-    it("returns a StreamHandle with update() and finish()", async () => {
+    it("returns a StreamHandle with append() and finish()", async () => {
       const adapter = createMockAdapter();
       const handle = await adapter.startStream("C123", "T456");
 
       expect(handle).toBeDefined();
-      expect(typeof handle.update).toBe("function");
+      expect(typeof handle.append).toBe("function");
       expect(typeof handle.finish).toBe("function");
     });
 
-    it("StreamHandle.update() accepts accumulated text", async () => {
-      const mockUpdate = vi.fn(async () => {});
+    it("StreamHandle.append() accepts text deltas", async () => {
+      const mockAppend = vi.fn(async () => {});
       const adapter = createMockAdapter({
         startStream: vi.fn(async () => ({
-          update: mockUpdate,
+          append: mockAppend,
           finish: vi.fn(async () => {}),
         })),
       });
 
       const handle = await adapter.startStream("C123", "T456");
-      await handle.update("Partial response...");
-      await handle.update("Partial response... more text");
+      await handle.append("Partial ");
+      await handle.append("response...");
 
-      expect(mockUpdate).toHaveBeenCalledTimes(2);
-      expect(mockUpdate).toHaveBeenCalledWith("Partial response...");
-      expect(mockUpdate).toHaveBeenCalledWith("Partial response... more text");
+      expect(mockAppend).toHaveBeenCalledTimes(2);
+      expect(mockAppend).toHaveBeenCalledWith("Partial ");
+      expect(mockAppend).toHaveBeenCalledWith("response...");
     });
 
-    it("StreamHandle.finish() finalizes with complete text", async () => {
+    it("StreamHandle.finish() finalizes with an optional final delta", async () => {
       const mockFinish = vi.fn(async () => {});
       const adapter = createMockAdapter({
         startStream: vi.fn(async () => ({
-          update: vi.fn(async () => {}),
+          append: vi.fn(async () => {}),
           finish: mockFinish,
         })),
       });
 
       const handle = await adapter.startStream("C123", "T456");
-      await handle.finish("Complete response text.");
+      await handle.finish("final delta.");
 
-      expect(mockFinish).toHaveBeenCalledWith("Complete response text.");
-    });
-  });
-
-  describe("sendTypingIndicator() (optional)", () => {
-    it("is not required for interface compliance", () => {
-      const adapter = createMockAdapter();
-      // sendTypingIndicator is optional, so it may be undefined
-      expect(adapter.sendTypingIndicator).toBeUndefined();
+      expect(mockFinish).toHaveBeenCalledWith("final delta.");
     });
 
-    it("can be implemented optionally", async () => {
-      const mockTyping = vi.fn(async () => {});
+    it("StreamHandle.finish() can be called without arguments", async () => {
+      const mockFinish = vi.fn(async () => {});
       const adapter = createMockAdapter({
-        sendTypingIndicator: mockTyping,
+        startStream: vi.fn(async () => ({
+          append: vi.fn(async () => {}),
+          finish: mockFinish,
+        })),
       });
 
-      await adapter.sendTypingIndicator!("C123", "T456");
-      expect(mockTyping).toHaveBeenCalledWith("C123", "T456");
+      const handle = await adapter.startStream("C123", "T456");
+      await handle.finish();
+
+      expect(mockFinish).toHaveBeenCalledTimes(1);
     });
   });
+
 });
 
 describe("ChannelMessage type", () => {
@@ -363,46 +361,67 @@ describe("ChannelAdapter contract compliance (mock adapter)", () => {
 });
 
 describe("StreamHandle streaming lifecycle", () => {
-  it("supports the typical update-then-finish flow", async () => {
+  it("supports the typical append-then-finish flow", async () => {
     const calls: string[] = [];
 
     const handle: StreamHandle = {
-      update: async (text: string) => {
-        calls.push(`update:${text}`);
+      append: async (delta: string) => {
+        calls.push(`append:${delta}`);
       },
-      finish: async (text: string) => {
-        calls.push(`finish:${text}`);
+      finish: async (finalDelta?: string) => {
+        calls.push(`finish:${finalDelta ?? ""}`);
       },
     };
 
-    // Simulate streaming: several updates, then finish
-    await handle.update("Hello");
-    await handle.update("Hello, world");
-    await handle.update("Hello, world! How are");
-    await handle.finish("Hello, world! How are you?");
+    // Simulate streaming: several appends with deltas, then finish with remaining
+    await handle.append("Hello");
+    await handle.append(", world");
+    await handle.append("! How are");
+    await handle.finish(" you?");
 
     expect(calls).toEqual([
-      "update:Hello",
-      "update:Hello, world",
-      "update:Hello, world! How are",
-      "finish:Hello, world! How are you?",
+      "append:Hello",
+      "append:, world",
+      "append:! How are",
+      "finish: you?",
     ]);
   });
 
-  it("supports immediate finish without updates (non-streaming fallback)", async () => {
+  it("supports immediate finish with full text (non-streaming fallback)", async () => {
     const calls: string[] = [];
 
     const handle: StreamHandle = {
-      update: async (text: string) => {
-        calls.push(`update:${text}`);
+      append: async (delta: string) => {
+        calls.push(`append:${delta}`);
       },
-      finish: async (text: string) => {
-        calls.push(`finish:${text}`);
+      finish: async (finalDelta?: string) => {
+        calls.push(`finish:${finalDelta ?? ""}`);
       },
     };
 
     await handle.finish("Complete response in one shot.");
 
     expect(calls).toEqual(["finish:Complete response in one shot."]);
+  });
+
+  it("supports finish without arguments when all text was already appended", async () => {
+    const calls: string[] = [];
+
+    const handle: StreamHandle = {
+      append: async (delta: string) => {
+        calls.push(`append:${delta}`);
+      },
+      finish: async (finalDelta?: string) => {
+        calls.push(`finish:${finalDelta ?? ""}`);
+      },
+    };
+
+    await handle.append("All text sent.");
+    await handle.finish();
+
+    expect(calls).toEqual([
+      "append:All text sent.",
+      "finish:",
+    ]);
   });
 });
