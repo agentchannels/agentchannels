@@ -50,7 +50,7 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
   // Step 1: App configuration preferences
   const appName = await input({
     message: 'What should your Slack bot be called?',
-    default: 'AgentChannels Bot',
+    default: 'General Agent',
     validate: (value) => {
       if (!value.trim()) return 'App name cannot be empty';
       if (value.length > 35) return 'App name must be 35 characters or less';
@@ -60,7 +60,7 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
 
   const appDescription = await input({
     message: 'Short description for the app:',
-    default: 'Claude AI agent connected to Slack via AgentChannels',
+    default: 'AI agent for your team — powered by agentchannels',
     validate: (value) => {
       if (value.length > 140) return 'Description must be 140 characters or less';
       return true;
@@ -72,7 +72,7 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
     message: 'How would you like to set up the Slack app?',
     choices: [
       {
-        name: 'Automatic — Create the app via Slack API (requires a Configuration Token)',
+        name: 'Automatic — Create the app via Slack API (requires a Refresh Token)',
         value: 'automatic',
       },
       {
@@ -227,11 +227,11 @@ interface AutomaticSetupCredentials {
  * Automatic setup flow that uses the Slack Manifest API to create an app,
  * install it to the workspace, and generate all required tokens.
  *
- * Requires a Slack Configuration Token which can be generated at:
- * https://api.slack.com/apps → Your Apps → Configuration tokens
+ * Requires a Slack Refresh Token which can be generated at:
+ * https://api.slack.com/apps → Your Apps → Refresh tokens
  *
  * Steps:
- * 1. Prompt for the configuration token
+ * 1. Prompt for the refresh token
  * 2. Create the app from a manifest (→ signing secret)
  * 3. Install the app to the workspace (→ bot token)
  * 4. Generate an app-level token (→ app token for Socket Mode)
@@ -268,12 +268,12 @@ async function _automaticSetupAttempt(
   appDescription: string,
 ): Promise<AutomaticSetupCredentials> {
   console.log('\n🤖 Automatic Setup via Slack API\n');
-  console.log('This method uses the Slack Configuration Token API to create your app automatically.');
-  console.log('You can generate a Configuration Token at:');
-  console.log('  https://api.slack.com/apps → Your Apps → Configuration tokens\n');
+  console.log('This method uses a Slack Refresh Token to create your app automatically.');
+  console.log('You can generate a Refresh Token at:');
+  console.log('  https://api.slack.com/apps → Your Apps → Refresh tokens\n');
 
   const refreshToken = await password({
-    message: 'Slack Configuration Refresh Token (xoxe-...):',
+    message: 'Slack Refresh Token (xoxe-...):',
     validate: (value) => {
       if (!value.trim()) return 'Refresh token is required';
       if (!value.startsWith('xoxe-')) return 'Refresh token must start with xoxe-';
@@ -283,7 +283,7 @@ async function _automaticSetupAttempt(
   });
 
   // Step 0: Exchange refresh token for access token
-  console.log('\n⏳ Rotating configuration token...');
+  console.log('\n⏳ Rotating refresh token...');
   const rotationResult = await SlackApiClient.rotateConfigToken(refreshToken);
   console.log(`   ✅ Token rotated${rotationResult.team?.name ? ` (workspace: ${rotationResult.team.name})` : ''}`);
   console.log('   ⚠️  Your old refresh token is now invalidated.');

@@ -6,8 +6,8 @@
  * - Generating app-level tokens (apps.manifest.create + auth)
  * - Installing apps to a workspace
  *
- * These APIs require a **Configuration Token** (issued at
- * https://api.slack.com/apps → "Your Apps" → "Configuration tokens").
+ * These APIs require a **Refresh Token** (issued at
+ * https://api.slack.com/apps → "Your Apps" → "Refresh tokens").
  *
  * @see https://api.slack.com/methods/apps.manifest.create
  * @see https://api.slack.com/methods/apps.connections.open
@@ -73,7 +73,7 @@ export interface SlackApiClientOptions {
 /**
  * Low-level Slack API client for managing Slack apps programmatically.
  *
- * Requires an access token obtained by rotating a Configuration Refresh Token
+ * Requires an access token obtained by rotating a Refresh Token
  * via `SlackApiClient.rotateConfigToken()`.
  *
  * All methods throw on HTTP-level errors and return the parsed Slack response
@@ -92,12 +92,12 @@ export class SlackApiClient {
   }
 
   /**
-   * Exchange a Configuration Refresh Token (xoxe-...) for a short-lived access token.
+   * Exchange a Refresh Token (xoxe-...) for a short-lived access token.
    *
    * IMPORTANT: Each refresh token is single-use. After calling this, the old
    * refresh token is invalidated. Save the new refresh_token from the response.
    *
-   * @param refreshToken - The configuration refresh token (xoxe-...)
+   * @param refreshToken - The refresh token (xoxe-...)
    * @param apiBase - Optional API base URL override
    * @returns Access token + new refresh token
    */

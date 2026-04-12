@@ -27,7 +27,7 @@ export interface OAuthInstallResult {
 
 /**
  * Update the app manifest to include the OAuth redirect URL.
- * Requires a configuration access token (from tooling.tokens.rotate).
+ * Requires an access token (from tooling.tokens.rotate).
  */
 export async function addRedirectUrl(
   accessToken: string,
