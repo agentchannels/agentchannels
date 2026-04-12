@@ -187,7 +187,7 @@ export async function initAgent(options: InitAgentOptions = {}): Promise<void> {
       coreOptions = {
         mode: "create",
         agentName: "agentchannels-bot",
-        agentDescription: "AgentChannels Slack bot",
+        agentDescription: "Agent Channels Slack bot",
         envMode: existingEnvId ? "existing" : "create",
         environmentId: existingEnvId,
         environmentName: "agentchannels-env",
@@ -249,7 +249,7 @@ export async function initAgent(options: InitAgentOptions = {}): Promise<void> {
 
       const agentDescription = await input({
         message: "Agent description (optional):",
-        default: "AgentChannels Slack bot powered by Claude",
+        default: "Agent Channels bot",
       });
 
       const agentModel = await select({

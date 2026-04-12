@@ -44,7 +44,7 @@ export type SetupMethod = 'automatic' | 'guided' | 'manual';
 export async function initSlack(options: SlackInitOptions = {}): Promise<SlackInitResult> {
   const cwd = options.cwd ?? process.cwd();
 
-  console.log('\n🔧 AgentChannels — Slack Setup\n');
+  console.log('\n🔧 Agent Channels — Slack Setup\n');
   console.log('This wizard will help you configure a Slack bot for use with Claude Managed Agents.\n');
 
   // Step 1: App configuration preferences
