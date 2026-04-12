@@ -203,6 +203,75 @@ The server:
 
 Press `Ctrl+C` to stop.
 
+### `ach deploy railway`
+
+Deploys agentchannels to Railway with an interactive wizard.
+
+```bash
+ach deploy railway
+```
+
+See the [Deployment](#deployment) section for details.
+
+## Deployment
+
+### Deploy to Railway (recommended)
+
+Deploy your agentchannels bot to [Railway](https://railway.com) with one command:
+
+```bash
+ach deploy railway
+```
+
+The wizard will:
+1. Authenticate with your Railway API token
+2. Create a project and service
+3. Read env vars from your local `.env`, show masked values for confirmation
+4. Push env vars to Railway
+5. Deploy the `agentchannels` Docker image
+6. Generate a public domain
+
+**Prerequisites:**
+- A [Railway account](https://railway.com) (free tier available)
+- A Railway API token — create one at [railway.com/account/tokens](https://railway.com/account/tokens)
+
+**Using an environment variable:**
+
+Set `RAILWAY_API_TOKEN` in your `.env` or environment to skip the token prompt:
+
+```bash
+export RAILWAY_API_TOKEN=your-token-here
+ach deploy railway
+```
+
+### Deploy with Docker
+
+Run agentchannels anywhere Docker is supported:
+
+```bash
+docker run -d \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e CLAUDE_AGENT_ID=agent_... \
+  -e CLAUDE_ENVIRONMENT_ID=env_... \
+  -e SLACK_BOT_TOKEN=xoxb-... \
+  -e SLACK_APP_TOKEN=xapp-... \
+  -e SLACK_SIGNING_SECRET=... \
+  ghcr.io/agentchannels/agentchannels:latest
+```
+
+### Deploy to other platforms
+
+agentchannels uses **Socket Mode** (WebSocket), so it works on any platform that supports persistent processes:
+
+| Platform | How |
+|---|---|
+| **Railway** | `ach deploy railway` (built-in) |
+| **Fly.io** | `fly launch` with the Dockerfile |
+| **Render** | Connect GitHub repo, set start command to `npm start` |
+| **VPS** | `npm install -g agentchannels && ach serve` |
+
+> **Note:** Serverless platforms (Vercel, AWS Lambda) are not recommended because agent responses take 5-30+ seconds, exceeding typical function timeouts.
+
 ## Architecture
 
 agentchannels uses a **channel adapter pattern** for extensibility:
