@@ -1,6 +1,6 @@
 {
   "name": "agentchannels",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Connect Claude Managed Agents to messaging channels like Slack, Discord, Teams, and more",
   "type": "module",
   "main": "dist/cli/index.js",
