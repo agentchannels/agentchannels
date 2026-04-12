@@ -25,6 +25,7 @@ export class SlackAdapter implements ChannelAdapter {
   private app: App;
   private handlers: MessageHandler[] = [];
   private botUserId: string | undefined;
+  private teamId: string | undefined;
 
   constructor(private config: SlackAdapterConfig) {
     this.app = new App({
@@ -43,7 +44,8 @@ export class SlackAdapter implements ChannelAdapter {
     try {
       const authResult = await this.app.client.auth.test({ token: this.config.botToken });
       this.botUserId = authResult.user_id as string;
-      console.log(`[slack] Connected as @${authResult.user} (${this.botUserId})`);
+      this.teamId = authResult.team_id as string;
+      console.log(`[slack] Connected as @${authResult.user} (${this.botUserId}) in team ${this.teamId}`);
     } catch (err) {
       console.warn("[slack] Could not resolve bot user ID:", err);
     }
@@ -67,7 +69,7 @@ export class SlackAdapter implements ChannelAdapter {
     });
   }
 
-  async startStream(channelId: string, threadId: string): Promise<StreamHandle> {
+  async startStream(channelId: string, threadId: string, userId?: string): Promise<StreamHandle> {
     const client: WebClient = this.app.client;
     const tok = this.config.botToken;
 
@@ -76,6 +78,8 @@ export class SlackAdapter implements ChannelAdapter {
       channel: channelId,
       thread_ts: threadId,
       task_display_mode: "plan",
+      ...(this.teamId ? { recipient_team_id: this.teamId } : {}),
+      ...(userId ? { recipient_user_id: userId } : {}),
     });
     const messageTs = result.ts!;
 

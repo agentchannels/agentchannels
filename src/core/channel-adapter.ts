@@ -210,7 +210,7 @@ export interface ChannelAdapter {
    * @param threadId - The thread to reply in
    * @returns A StreamHandle for updating and finalizing the message
    */
-  startStream(channelId: string, threadId: string): Promise<StreamHandle>;
+  startStream(channelId: string, threadId: string, userId?: string): Promise<StreamHandle>;
 
   /**
    * Set a loading/processing status in the thread (e.g., "thinking...").

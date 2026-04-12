@@ -161,7 +161,7 @@ describe("StreamingBridge", () => {
 
       expect(result.success).toBe(true);
       expect(result.totalChars).toBe(12); // "Hello world!"
-      expect(adapter.startStream).toHaveBeenCalledWith("C123", "thread-1");
+      expect(adapter.startStream).toHaveBeenCalledWith("C123", "thread-1", "U456");
       expect(streamHandle.finishCalls.length).toBe(1);
       // All text delivered through append deltas + finish's final delta
       const appendedText = streamHandle.appendCalls.join("");

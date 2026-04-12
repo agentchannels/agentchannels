@@ -186,7 +186,7 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
-      expect(adapter.startStream).toHaveBeenCalledWith("C999", "thread-XYZ");
+      expect(adapter.startStream).toHaveBeenCalledWith("C999", "thread-XYZ", "U456");
     });
   });
 

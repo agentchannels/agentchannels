@@ -183,7 +183,7 @@ export class StreamingBridge {
    * it is rejected immediately with an error result.
    */
   async handleMessage(message: ChannelMessage): Promise<BridgeResult> {
-    const { channelId, threadId, text } = message;
+    const { channelId, threadId, text, userId } = message;
     const threadKey = `${this.adapter.name}:${channelId}:${threadId}`;
 
     // Guard: skip empty messages
@@ -219,6 +219,7 @@ export class StreamingBridge {
         channelId,
         threadId,
         text,
+        userId,
         threadKey,
         abortController.signal,
       );
@@ -279,6 +280,7 @@ export class StreamingBridge {
     channelId: string,
     threadId: string,
     text: string,
+    userId: string,
     threadKey: string,
     signal: AbortSignal,
   ): Promise<BridgeResult> {
@@ -336,7 +338,7 @@ export class StreamingBridge {
     let streamError: string | undefined;
 
     try {
-      stream = await this.adapter.startStream(channelId, threadId);
+      stream = await this.adapter.startStream(channelId, threadId, userId);
     } catch (err) {
       console.log(`[streaming-bridge] Failed to start stream for ${channelId}:${threadId}`);
       const errorMsg = err instanceof Error ? err.message : String(err);
