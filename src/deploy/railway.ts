@@ -11,7 +11,7 @@
  * 7. Wait for deployment, show URL
  */
 
-import { input, confirm, password } from "@inquirer/prompts";
+import { input, confirm, password, select } from "@inquirer/prompts";
 import { RailwayClient } from "./railway-client.js";
 import { readEnvFile } from "../config/env.js";
 
@@ -48,10 +48,25 @@ export async function deployRailway(): Promise<void> {
   console.log("\nVerifying token...");
 
   let userName: string;
+  let workspaceId: string;
   try {
     const user = await client.whoami();
     userName = user.name || user.email;
-    console.log(`Authenticated as: ${userName}\n`);
+    console.log(`Authenticated as: ${userName}`);
+
+    const workspaces = user.workspaces;
+    if (!workspaces || workspaces.length === 0) {
+      console.error("No workspaces found. Create one at railway.com first.");
+      return;
+    } else if (workspaces.length === 1) {
+      workspaceId = workspaces[0].id;
+      console.log(`Workspace: ${workspaces[0].name}\n`);
+    } else {
+      workspaceId = await select({
+        message: "Select a workspace:",
+        choices: workspaces.map((w) => ({ name: w.name, value: w.id })),
+      });
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`Authentication failed: ${msg}`);
@@ -59,7 +74,7 @@ export async function deployRailway(): Promise<void> {
     return;
   }
 
-  // Step 3: Create project
+  // Step 4: Create project
   const projectName = await input({
     message: "Project name:",
     default: "agentchannels",
@@ -68,7 +83,7 @@ export async function deployRailway(): Promise<void> {
   console.log(`\nCreating project "${projectName}"...`);
   let project;
   try {
-    project = await client.createProject(projectName);
+    project = await client.createProject(projectName, workspaceId);
     console.log(`Project created: ${project.id}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -168,10 +183,15 @@ export async function deployRailway(): Promise<void> {
       console.log(`\nConnecting ${repoUrl} (${branch})...`);
       try {
         await client.connectRepo(service.id, repoUrl, branch);
-        console.log("Repo connected. Railway will deploy automatically on push.");
+        console.log("Repo connected.");
+
+        // Trigger initial deployment
+        console.log("Triggering deployment...");
+        await client.triggerDeploy(project.id, environmentId, service.id);
+        console.log("Deployment triggered. Railway is building your app.");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error(`Failed to connect repo: ${msg}`);
+        console.error(`Failed to connect/deploy: ${msg}`);
         console.error("You can connect it manually in the Railway dashboard.");
       }
     }

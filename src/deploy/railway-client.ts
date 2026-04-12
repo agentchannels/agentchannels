@@ -30,16 +30,26 @@ export class RailwayClient {
     this.token = config.token;
   }
 
-  /** Verify the token works by fetching user info */
-  async whoami(): Promise<{ name: string; email: string }> {
-    const result = await this.query<{ me: { name: string; email: string } }>(
-      `query { me { name email } }`,
+  /** Verify the token works and get user info with workspaces */
+  async whoami(): Promise<{
+    name: string;
+    email: string;
+    workspaces: Array<{ id: string; name: string }>;
+  }> {
+    const result = await this.query<{
+      me: {
+        name: string;
+        email: string;
+        workspaces: Array<{ id: string; name: string }>;
+      };
+    }>(
+      `query { me { name email workspaces { id name } } }`,
     );
     return result.me;
   }
 
   /** Create a new project */
-  async createProject(name: string): Promise<RailwayProject> {
+  async createProject(name: string, workspaceId: string): Promise<RailwayProject> {
     const result = await this.query<{ projectCreate: RailwayProject }>(
       `mutation($input: ProjectCreateInput!) {
         projectCreate(input: $input) {
@@ -49,7 +59,7 @@ export class RailwayClient {
           services { edges { node { id name } } }
         }
       }`,
-      { input: { name } },
+      { input: { name, workspaceId } },
     );
     return result.projectCreate;
   }
