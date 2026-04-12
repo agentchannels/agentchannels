@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { registerServeCommand } from "../commands/serve.js";
 import { initSlack } from "../channels/slack/init.js";
 import { initAgent } from "../commands/init-agent.js";
+import { deployRailway } from "../deploy/railway.js";
 
 const program = new Command();
 
@@ -57,6 +58,27 @@ initCmd
         process.exit(0);
       }
       console.error("\n❌ Agent setup failed:", (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+// Deploy subcommands
+const deployCmd = program
+  .command("deploy")
+  .description("Deploy agentchannels to a cloud platform");
+
+deployCmd
+  .command("railway")
+  .description("Deploy to Railway")
+  .action(async () => {
+    try {
+      await deployRailway();
+    } catch (error) {
+      if ((error as Error).name === "ExitPromptError") {
+        console.log("\n Setup cancelled.");
+        process.exit(0);
+      }
+      console.error("\n Deploy failed:", (error as Error).message);
       process.exit(1);
     }
   });

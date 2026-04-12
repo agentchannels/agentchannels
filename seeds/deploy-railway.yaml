@@ -1,0 +1,29 @@
+goal: >
+  Add an "ach deploy railway" command that deploys the agentchannels server to
+  Railway via a full interactive wizard. Uses Railway's GraphQL API directly
+  (no Railway CLI dependency), OAuth browser flow for auth, Nixpacks for builds,
+  and auto-reads env vars from .env with user confirmation.
+
+constraints:
+  - Use Railway GraphQL API directly (no Railway CLI dependency)
+  - OAuth browser flow for authentication (open browser, catch redirect)
+  - Nixpacks build (Railway auto-detects Node.js, no Dockerfile needed)
+  - Auto-read env vars from local .env, show for confirmation before pushing
+  - No custom domains, multi-service deploys, or CI/CD integration in v1
+  - Reuse existing OAuth local server pattern from src/channels/slack/oauth.ts
+
+acceptance_criteria:
+  - >
+    ach deploy railway command exists and runs an interactive wizard
+  - >
+    OAuth browser flow authenticates with Railway and stores the token
+  - >
+    Creates a new Railway project via GraphQL API
+  - >
+    Reads env vars from .env, displays masked values, and pushes to Railway after confirmation
+  - >
+    Deploys the agentchannels code to Railway using Nixpacks
+  - >
+    Shows the Railway deployment URL when complete
+  - >
+    Handles errors gracefully with retry prompts
