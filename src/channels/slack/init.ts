@@ -142,6 +142,11 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
       },
     });
 
+    if (setupMethod === 'manual') {
+      console.log('\n💡 The App-Level Token requires the "connections:write" scope for Socket Mode.');
+      console.log('   Generate one at: Basic Information → App-Level Tokens → Generate Token and Scopes\n');
+    }
+
     appToken = await input({
       message: 'Slack App-Level Token (xapp-...):',
       default: existing.slackAppToken || undefined,
