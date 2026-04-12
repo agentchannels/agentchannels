@@ -21,7 +21,15 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "keywords": ["claude", "slack", "agent", "chatbot", "managed-agents", "anthropic", "cli"],
+  "keywords": [
+    "claude",
+    "slack",
+    "agent",
+    "chatbot",
+    "managed-agents",
+    "anthropic",
+    "cli"
+  ],
   "author": "AgentChannels",
   "license": "Apache-2.0",
   "repository": {
@@ -47,6 +55,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@slack/types": "^2.20.1",
     "@types/node": "^25.5.2",
     "tsx": "^4.21.0",
     "vitest": "^4.1.4"

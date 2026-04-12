@@ -1,4 +1,7 @@
 import { App } from "@slack/bolt";
+import type { WebClient } from "@slack/web-api";
+import type { AppMentionEvent } from "@slack/types";
+import type { GenericMessageEvent } from "@slack/types";
 import type {
   ChannelAdapter,
   ChannelMessage,
@@ -37,7 +40,6 @@ export class SlackAdapter implements ChannelAdapter {
   async connect(): Promise<void> {
     await this.app.start();
 
-    // Resolve bot user ID for mention detection
     try {
       const authResult = await this.app.client.auth.test({ token: this.config.botToken });
       this.botUserId = authResult.user_id as string;
@@ -57,7 +59,6 @@ export class SlackAdapter implements ChannelAdapter {
   }
 
   async sendMessage(channelId: string, threadId: string, text: string): Promise<void> {
-    console.log(`[slack] Sending message to ${channelId}:${threadId}: ${text.substring(0, 80)}`);
     await this.app.client.chat.postMessage({
       token: this.config.botToken,
       channel: channelId,
@@ -67,22 +68,19 @@ export class SlackAdapter implements ChannelAdapter {
   }
 
   async startStream(channelId: string, threadId: string): Promise<StreamHandle> {
-    const client = this.app.client as any;
+    const client: WebClient = this.app.client;
     const tok = this.config.botToken;
 
-    console.log(`[slack] Starting stream in ${channelId}:${threadId}`);
-    // Slack Agent SDK streaming with plan mode for task indicators
     const result = await client.chat.startStream({
       token: tok,
       channel: channelId,
       thread_ts: threadId,
       task_display_mode: "plan",
     });
-    const messageTs = result.ts;
+    const messageTs = result.ts!;
 
     return {
       append: async (delta: string) => {
-        console.log(`[slack] Appending to stream in ${channelId}:${threadId}: ${delta.substring(0, 80)}`);
         if (!delta) return;
         await client.chat.appendStream({
           token: tok,
@@ -92,14 +90,13 @@ export class SlackAdapter implements ChannelAdapter {
         });
       },
       appendTasks: async (tasks: StreamTask[]) => {
-        console.log(`[slack] Updating tasks in ${channelId}:${threadId}: ${JSON.stringify(tasks, undefined, 2)} tasks`);
         if (tasks.length === 0) return;
         await client.chat.appendStream({
           token: tok,
           channel: channelId,
           ts: messageTs,
           chunks: tasks.map((t) => ({
-            type: "task_update",
+            type: "task_update" as const,
             id: t.id,
             title: t.text,
             status: t.status,
@@ -107,47 +104,32 @@ export class SlackAdapter implements ChannelAdapter {
         });
       },
       finish: async (finalText?: string) => {
-        console.log(`[slack] Finishing stream in ${channelId}:${threadId} with final text: ${finalText?.substring(0, 80)}`);
         await client.chat.stopStream({
           token: tok,
           channel: channelId,
           ts: messageTs,
           ...(finalText
-            ? { chunks: [{ type: "markdown_text", text: finalText }] }
+            ? { chunks: [{ type: "markdown_text" as const, text: finalText }] }
             : {}),
         });
       },
     };
   }
 
-  /**
-   * Set the agent loading status in the thread.
-   * Shows a status indicator with rotating loading messages.
-   */
   async setStatus(channelId: string, threadId: string, status: string): Promise<void> {
-    console.log(`[slack] Setting status in ${channelId}:${threadId} to: ${status}`);
-    const client = this.app.client as any;
-    await client.assistant.threads.setStatus({
+    await this.app.client.assistant.threads.setStatus({
       channel_id: channelId,
       thread_ts: threadId,
-      status: status,
+      status,
     });
   }
 
-  /**
-   * Clear the agent loading status.
-   */
   async clearStatus(channelId: string, threadId: string): Promise<void> {
-    console.log(`[slack] Clearing status in ${channelId}:${threadId}`); 
     await this.setStatus(channelId, threadId, "");
   }
 
-  /**
-   * Set the thread title (shown in the agent thread UI).
-   */
   async setTitle(channelId: string, threadId: string, title: string): Promise<void> {
-    const client = this.app.client as any;
-    await client.assistant.threads.setTitle({
+    await this.app.client.assistant.threads.setTitle({
       channel_id: channelId,
       thread_ts: threadId,
       title,
@@ -155,21 +137,18 @@ export class SlackAdapter implements ChannelAdapter {
   }
 
   private setupListeners(): void {
-    // Listen for @mentions in channels
-    this.app.event("app_mention", async ({ event }: { event: any }) => {
-      const message = this.toChannelMessage(event, true, false);
+    this.app.event("app_mention", async ({ event }) => {
+      const mention = event as AppMentionEvent;
+      const message = this.toChannelMessage(mention, true, false);
       await this.dispatchMessage(message);
     });
 
-    // Listen for DMs
-    this.app.message(async ({ message: msg }: { message: any }) => {
-      // Only handle actual user messages (not bot messages, not edits)
-      if (!msg || msg.subtype) return;
-      const event = msg;
+    this.app.message(async ({ message: msg }) => {
+      const event = msg as GenericMessageEvent;
+      if (!event || event.subtype !== undefined) return;
 
-      // Check if this is a DM
       const isDM = event.channel_type === "im";
-      if (!isDM) return; // Channel messages handled by app_mention
+      if (!isDM) return;
 
       const message = this.toChannelMessage(event, false, true);
       await this.dispatchMessage(message);
@@ -177,14 +156,12 @@ export class SlackAdapter implements ChannelAdapter {
   }
 
   private toChannelMessage(
-    event: any,
+    event: AppMentionEvent | GenericMessageEvent,
     isMention: boolean,
     isDirectMessage: boolean,
   ): ChannelMessage {
-    // Use thread_ts if replying in a thread, otherwise use the message ts as thread root
     const threadId = event.thread_ts ?? event.ts;
 
-    // Strip bot mention from text if present
     let text = event.text ?? "";
     if (this.botUserId) {
       text = text.replace(new RegExp(`<@${this.botUserId}>\\s*`, "g"), "").trim();
@@ -194,7 +171,7 @@ export class SlackAdapter implements ChannelAdapter {
       id: event.ts ?? event.event_ts ?? "",
       channelId: event.channel,
       threadId,
-      userId: event.user,
+      userId: event.user ?? "",
       text,
       isMention,
       isDirectMessage,
