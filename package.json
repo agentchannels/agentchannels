@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/cli/index.js",
   "bin": {
-    "ach": "dist/cli/index.js"
+    "ach": "dist/cli/index.js",
+    "agentchannels": "dist/cli/index.js"
   },
   "files": [
     "dist",
