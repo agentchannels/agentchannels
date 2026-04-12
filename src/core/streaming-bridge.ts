@@ -383,11 +383,13 @@ export class StreamingBridge {
         }
       };
 
+      // Add initial task right after stream starts
+      tasks.push({ id: "init", text: "Initializing...", status: "in_progress" });
+      await sendTasks();
+
       reader.on("error", (event) => {
         streamError = event.error;
       });
-
-      reader.on("status", () => {});
 
       reader.on("done", async () => {
         markAllComplete();
@@ -405,6 +407,11 @@ export class StreamingBridge {
       });
 
       reader.on("thinking", async (event) => {
+        // Complete init task when thinking starts
+        const initTask = tasks.find((t) => t.id === "init");
+        if (initTask && initTask.status === "in_progress") {
+          initTask.status = "complete";
+        }
         for (const t of tasks) {
           if (t.id.startsWith("thinking_") && t.status === "in_progress") {
             t.status = "complete";
