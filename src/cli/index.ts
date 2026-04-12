@@ -1,17 +1,21 @@
 #!/usr/bin/env node
 
+import { createRequire } from "node:module";
 import { Command } from "commander";
 import { registerServeCommand } from "../commands/serve.js";
 import { initSlack } from "../channels/slack/init.js";
 import { initAgent } from "../commands/init-agent.js";
 import { deployRailway } from "../deploy/railway.js";
 
+const require = createRequire(import.meta.url);
+const pkg = require("../../package.json") as { version: string };
+
 const program = new Command();
 
 program
   .name("ach")
   .description("agentchannels — Connect Claude Managed Agents to messaging channels")
-  .version("0.1.0");
+  .version(pkg.version);
 
 // Register commands
 registerServeCommand(program);
