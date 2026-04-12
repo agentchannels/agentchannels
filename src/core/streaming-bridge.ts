@@ -367,48 +367,43 @@ export class StreamingBridge {
       );
 
       // Task tracking for plan-mode streams
+      let textStarted = false;
       type TaskInfo = { id: string; text: string; status: "pending" | "in_progress" | "complete" | "error" };
       const tasks: TaskInfo[] = [];
       let taskCounter = 0;
-      let textStarted = false;
+      let thinkingId = 0;
 
       const sendTasks = () => {
         if (!stream?.appendTasks || tasks.length === 0) return;
         stream.appendTasks([...tasks]).catch(() => {});
       };
 
+      const markAllComplete = () => {
+        for (const t of tasks) {
+          if (t.status !== "complete") t.status = "complete";
+        }
+      };
+
       reader.on("error", (event) => {
         streamError = event.error;
       });
 
-      reader.on("status", (event) => {
-        // TODO: Check the event status value and update tasks/status accordingly
-        console.log(`[streaming-bridge] Received status update for ${channelId}:${threadId}: ${event.status}`);
-        tasks.push({ id: "running", text: "Running...", status: "in_progress" });
-        sendTasks();
-      })
+      // status events — ignore (no task for "running")
+      reader.on("status", () => {});
 
+      // done → mark all tasks complete
       reader.on("done", () => {
-        console.log(`[streaming-bridge] Received done event for ${channelId}:${threadId}`);
-        // Mark all tasks as complete
-        for (const t of tasks) {
-          if (t.status !== "complete") t.status = "complete";
-        }
+        markAllComplete();
         sendTasks();
       });
 
-      // Text deltas → append directly to stream
+      // Text deltas → mark all tasks complete, clear status, append text
       reader.on("text_delta", (event) => {
-        console.log(`[streaming-bridge] Received text delta for ${channelId}:${threadId}: ${event.text.substring(0, 80)}`);
         fullText += event.text;
         if (!textStarted) {
           textStarted = true;
-          // Mark all tasks as complete
-          for (const t of tasks) {
-            if (t.status !== "complete") t.status = "complete";
-          }
+          markAllComplete();
           if (tasks.length > 0) sendTasks();
-          // Clear loading status
           if (this.adapter.clearStatus) {
             this.adapter.clearStatus(channelId, threadId).catch(() => {});
           }
@@ -416,28 +411,33 @@ export class StreamingBridge {
         stream!.append(event.text).then(() => updateCount++).catch(() => {});
       });
 
-      // Thinking → add/update thinking task
+      // Thinking (from agent.thinking or span.model_request_start)
+      // → add a new thinking task each time (agent may think multiple rounds)
       reader.on("thinking", () => {
-        console.log(`[streaming-bridge] Received thinking event for ${channelId}:${threadId}`);
         if (textStarted) return;
-        // Only add thinking task once
-        if (!tasks.find((t) => t.id === "thinking")) {
-          tasks.push({ id: "thinking", text: "Thinking...", status: "in_progress" });
-          sendTasks();
+        // Complete any previous in_progress thinking task
+        for (const t of tasks) {
+          if (t.id.startsWith("thinking_") && t.status === "in_progress") {
+            t.status = "complete";
+          }
         }
-        // Also update setStatus for adapters without appendTasks
+        const id = `thinking_${++thinkingId}`;
+        tasks.push({ id, text: "Thinking...", status: "in_progress" });
+        sendTasks();
         if (this.adapter.setStatus) {
           this.adapter.setStatus(channelId, threadId, "Thinking...").catch(() => {});
         }
       });
 
-      // Tool use → complete thinking, add tool task as in_progress
+      // Tool use → complete current thinking, add tool task
       reader.on("tool_use", (event) => {
         if (textStarted) return;
-        // Complete thinking task
-        const thinking = tasks.find((t) => t.id === "thinking");
-        if (thinking && thinking.status === "in_progress") thinking.status = "complete";
-        // Add tool task
+        // Complete thinking tasks
+        for (const t of tasks) {
+          if (t.id.startsWith("thinking_") && t.status === "in_progress") {
+            t.status = "complete";
+          }
+        }
         const description = describeToolUse(event.name, event.input);
         const toolId = `tool_${++taskCounter}`;
         tasks.push({ id: toolId, text: description, status: "in_progress" });
@@ -450,7 +450,6 @@ export class StreamingBridge {
       // Tool result → mark the most recent in_progress tool as complete
       reader.on("tool_result", () => {
         if (textStarted) return;
-        // Find the last in_progress tool task and mark it complete
         for (let i = tasks.length - 1; i >= 0; i--) {
           if (tasks[i].id.startsWith("tool_") && tasks[i].status === "in_progress") {
             tasks[i].status = "complete";

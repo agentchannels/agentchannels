@@ -4,30 +4,40 @@
 
 export function describeToolUse(name: string, input: unknown): string {
   const inp = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  // Normalize tool name for matching (handles both PascalCase and snake_case)
+  const n = name.toLowerCase();
 
-  switch (name) {
-    case "Read":
-      return `:mag: Reading \`${shortenPath(inp.file_path)}\``;
-    case "Write":
-      return `:pencil: Writing \`${shortenPath(inp.file_path)}\``;
-    case "Edit":
-      return `:pencil2: Editing \`${shortenPath(inp.file_path)}\``;
-    case "Glob":
+  switch (n) {
+    case "read":
+    case "file_read":
+      return `:mag: Reading \`${shortenPath(inp.file_path ?? inp.path)}\``;
+    case "write":
+    case "file_write":
+      return `:pencil: Writing \`${shortenPath(inp.file_path ?? inp.path)}\``;
+    case "edit":
+    case "file_edit":
+      return `:pencil2: Editing \`${shortenPath(inp.file_path ?? inp.path)}\``;
+    case "glob":
       return `:open_file_folder: Searching files matching \`${inp.pattern || "..."}\``;
-    case "Grep":
+    case "grep":
       return `:mag_right: Searching for \`${truncate(String(inp.pattern ?? ""), 40)}\``;
-    case "Bash": {
+    case "bash":
+    case "execute_bash": {
       const cmd = truncate(String(inp.command ?? "").split("\n")[0], 60);
       return `:gear: Running \`${cmd}\``;
     }
-    case "WebSearch":
+    case "websearch":
+    case "web_search":
       return `:globe_with_meridians: Searching the web for \`${truncate(String(inp.query ?? ""), 50)}\``;
-    case "WebFetch":
+    case "webfetch":
+    case "web_fetch":
       return `:globe_with_meridians: Fetching \`${truncate(String(inp.url ?? ""), 60)}\``;
-    case "Agent":
+    case "agent":
       return `:robot_face: Spawning agent: ${truncate(String(inp.description ?? inp.prompt ?? ""), 50)}`;
-    case "NotebookEdit":
+    case "notebookedit":
       return `:notebook: Editing notebook \`${shortenPath(inp.notebook_path)}\``;
+    case "list_directory":
+      return `:open_file_folder: Listing \`${shortenPath(inp.path)}\``;
     default:
       return `:wrench: Using \`${name}\``;
   }

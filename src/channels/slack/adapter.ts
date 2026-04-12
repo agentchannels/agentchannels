@@ -92,7 +92,7 @@ export class SlackAdapter implements ChannelAdapter {
         });
       },
       appendTasks: async (tasks: StreamTask[]) => {
-        console.log(`[slack] Updating tasks in ${channelId}:${threadId}: ${tasks.length} tasks`);
+        console.log(`[slack] Updating tasks in ${channelId}:${threadId}: ${JSON.stringify(tasks, undefined, 2)} tasks`);
         if (tasks.length === 0) return;
         await client.chat.appendStream({
           token: tok,
