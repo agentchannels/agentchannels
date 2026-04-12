@@ -152,51 +152,20 @@ export async function deployRailway(): Promise<void> {
     }
   }
 
-  // Step 5: Connect repo and deploy
-  // Check if the current directory has a git remote
-  let repoUrl: string | undefined;
+  // Step 5: Deploy using the agentchannels Docker image
+  console.log("\nConfiguring deployment...");
   try {
-    const { execSync } = await import("node:child_process");
-    const remote = execSync("git remote get-url origin", { encoding: "utf8" }).trim();
-    // Extract owner/repo from git URL
-    const match = remote.match(/github\.com[:/](.+?)(?:\.git)?$/);
-    if (match) {
-      repoUrl = match[1];
-    }
-  } catch {
-    // No git remote
-  }
+    await client.setServiceImage(service.id, "ghcr.io/agentchannels/agentchannels:latest");
+    console.log("Service configured with agentchannels Docker image.");
 
-  if (repoUrl) {
-    console.log(`\nDetected GitHub repo: ${repoUrl}`);
-    const connectRepo = await confirm({
-      message: "Connect this repo for auto-deploy?",
-      default: true,
-    });
-
-    if (connectRepo) {
-      const branch = await input({
-        message: "Branch to deploy:",
-        default: "main",
-      });
-
-      console.log(`\nConnecting ${repoUrl} (${branch})...`);
-      try {
-        await client.connectRepo(service.id, repoUrl, branch);
-        console.log("Repo connected.");
-
-        // Trigger initial deployment
-        console.log("Triggering deployment...");
-        await client.triggerDeploy(project.id, environmentId, service.id);
-        console.log("Deployment triggered. Railway is building your app.");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`Failed to connect/deploy: ${msg}`);
-        console.error("You can connect it manually in the Railway dashboard.");
-      }
-    }
-  } else {
-    console.log("\nNo GitHub remote detected. You can connect a repo in the Railway dashboard.");
+    // Trigger deployment
+    console.log("Triggering deployment...");
+    await client.triggerDeploy(project.id, environmentId, service.id);
+    console.log("Deployment triggered. Railway is pulling and starting the image...");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Failed to deploy: ${msg}`);
+    console.error("You can configure the service manually in the Railway dashboard.");
   }
 
   // Step 6: Generate a public domain
@@ -215,9 +184,7 @@ export async function deployRailway(): Promise<void> {
   console.log(`  Environment: ${environmentName}`);
   console.log(`  Service:     ${service.name}`);
   console.log(`  Variables:   ${Object.keys(varsToSet).length} set`);
-  if (repoUrl) {
-    console.log(`  Repo:        ${repoUrl}`);
-  }
+  console.log(`  Image:       ghcr.io/agentchannels/agentchannels:latest`);
   console.log(`\n  Dashboard:   https://railway.com/project/${project.id}`);
   console.log("\nDone! Your agentchannels server will be running on Railway.");
   console.log("The bot will connect to Slack via Socket Mode automatically.\n");

@@ -113,19 +113,15 @@ export class RailwayClient {
     );
   }
 
-  /** Connect a GitHub repo to a service for deployment */
-  async connectRepo(
-    serviceId: string,
-    repo: string,
-    branch: string = "main",
-  ): Promise<void> {
+  /** Set a Docker image as the service source */
+  async setServiceImage(serviceId: string, image: string): Promise<void> {
     await this.query(
-      `mutation($serviceId: String!, $input: ServiceConnectInput!) {
-        serviceConnect(id: $serviceId, input: $input) { id }
+      `mutation($id: String!, $input: ServiceInstanceUpdateInput!) {
+        serviceInstanceUpdate(serviceId: $id, input: $input) { id }
       }`,
       {
-        serviceId,
-        input: { repo, branch },
+        id: serviceId,
+        input: { source: { image } },
       },
     );
   }
