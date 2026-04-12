@@ -36,6 +36,7 @@ export interface SessionOutputReaderOptions {
 export interface SessionOutputReaderEvents {
   text_delta: [AgentStreamEvent & { type: "text_delta" }];
   tool_use: [AgentStreamEvent & { type: "tool_use" }];
+  tool_result: [AgentStreamEvent & { type: "tool_result" }];
   thinking: [AgentStreamEvent & { type: "thinking" }];
   status: [AgentStreamEvent & { type: "status" }];
   done: [AgentStreamEvent & { type: "done" }];
@@ -248,7 +249,7 @@ export class SessionOutputReader extends EventEmitter {
     };
 
     const eventTypes = [
-      "text_delta", "tool_use", "thinking", "status", "done", "error", "raw",
+      "text_delta", "tool_use", "tool_result", "thinking", "status", "done", "error", "raw",
     ] as const;
 
     for (const type of eventTypes) {

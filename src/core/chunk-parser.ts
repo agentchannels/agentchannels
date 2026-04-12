@@ -28,6 +28,7 @@ export interface RawSessionEvent {
 export type AgentStreamEvent =
   | TextDeltaEvent
   | ToolUseEvent
+  | ToolResultEvent
   | ThinkingEvent
   | StatusEvent
   | DoneEvent
@@ -43,6 +44,12 @@ export interface ToolUseEvent {
   type: "tool_use";
   name: string;
   input: unknown;
+}
+
+export interface ToolResultEvent {
+  type: "tool_result";
+  name?: string;
+  toolUseId?: string;
 }
 
 export interface ThinkingEvent {
@@ -119,6 +126,18 @@ export function parseSSEEvent(event: unknown): ParseResult {
     case "agent.tool_use":
       return parseAgentToolUse(rawEvent);
 
+    case "agent.tool_result":
+      return parseAgentToolResult(rawEvent);
+
+    case "agent.mcp_tool_use":
+      return parseAgentToolUse(rawEvent);
+
+    case "agent.mcp_tool_result":
+      return parseAgentToolResult(rawEvent);
+
+    case "agent.custom_tool_use":
+      return parseAgentToolUse(rawEvent);
+
     case "agent.thinking":
       return parseAgentThinking(rawEvent);
 
@@ -129,6 +148,9 @@ export function parseSSEEvent(event: unknown): ParseResult {
     case "session.status_idle":
       return parseSessionIdle(rawEvent);
 
+    case "session.status_rescheduled":
+      return { events: [{ type: "status", status: "rescheduled" }], terminal: false };
+
     case "session.status_terminated":
       return { events: [{ type: "done", stopReason: "terminated" }], terminal: true };
 
@@ -138,11 +160,26 @@ export function parseSSEEvent(event: unknown): ParseResult {
     case "session.deleted":
       return { events: [{ type: "done", stopReason: "deleted" }], terminal: true };
 
-    // --- Message lifecycle events (informational) ---
+    // --- Span events (observability) ---
+    case "span.model_request_start":
+      return { events: [{ type: "thinking" }], terminal: false };
+
+    case "span.model_request_end":
+      return { events: [], terminal: false };
+
+    // --- Informational events ---
+    case "agent.thread_context_compacted":
+    case "agent.thread_message_sent":
+    case "agent.thread_message_received":
+    case "session.thread_created":
+    case "session.thread_idle":
+    case "session.outcome_evaluated":
+    case "span.outcome_evaluation_start":
+    case "span.outcome_evaluation_ongoing":
+    case "span.outcome_evaluation_end":
     case "message_start":
     case "message_delta":
     case "message_stop":
-      // Informational SSE framing events; no user-facing action needed
       return { events: [], terminal: false };
 
     // Ignore any unknown/telemetry events
@@ -203,6 +240,17 @@ function parseAgentToolUse(rawEvent: Record<string, unknown>): ParseResult {
       type: "tool_use",
       name: (rawEvent.name as string) ?? "unknown",
       input: rawEvent.input,
+    }],
+    terminal: false,
+  };
+}
+
+function parseAgentToolResult(rawEvent: Record<string, unknown>): ParseResult {
+  return {
+    events: [{
+      type: "tool_result",
+      name: (rawEvent.name as string) ?? undefined,
+      toolUseId: (rawEvent.tool_use_id as string) ?? undefined,
     }],
     terminal: false,
   };

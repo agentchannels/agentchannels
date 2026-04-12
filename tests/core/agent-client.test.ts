@@ -293,7 +293,7 @@ describe("AgentClient", () => {
         { type: "status", status: "running" },
         { type: "text_delta", text: "Hello! " },
         { type: "text_delta", text: "How can I help?" },
-        { type: "done" },
+        { type: "done", stopReason: "end_turn" },
       ]);
     });
 
@@ -319,7 +319,7 @@ describe("AgentClient", () => {
       expect(events).toEqual([
         { type: "text_delta", text: "Hello" },
         { type: "text_delta", text: " world" },
-        { type: "done" },
+        { type: "done", stopReason: "end_turn" },
       ]);
     });
 
@@ -347,7 +347,7 @@ describe("AgentClient", () => {
       expect(events).toEqual([
         { type: "thinking", text: "Let me consider..." },
         { type: "text_delta", text: "The answer is 42." },
-        { type: "done" },
+        { type: "done", stopReason: "end_turn" },
       ]);
     });
 
@@ -499,7 +499,7 @@ describe("AgentClient", () => {
       // Unknown event should be silently ignored
       expect(events).toEqual([
         { type: "text_delta", text: "Hi" },
-        { type: "done" },
+        { type: "done", stopReason: "end_turn" },
       ]);
     });
 
@@ -517,7 +517,7 @@ describe("AgentClient", () => {
         events.push(event);
       }
 
-      expect(events).toEqual([{ type: "done" }]);
+      expect(events).toEqual([{ type: "done", stopReason: "end_turn" }]);
     });
   });
 
@@ -536,16 +536,18 @@ describe("AgentClient", () => {
         events.push(event);
       }
 
-      // Should have raw + parsed for the content_block_delta event.
-      // session.status_idle causes a break in the loop before raw/parsed are emitted,
-      // so only the final { type: "done" } is yielded.
+      // Raw + parsed for both events
       expect(events).toEqual([
         {
           type: "raw",
           event: { type: "content_block_delta", delta: { type: "text_delta", text: "Hi" } },
         },
         { type: "text_delta", text: "Hi" },
-        { type: "done" },
+        {
+          type: "raw",
+          event: { type: "session.status_idle", stop_reason: { type: "end_turn" } },
+        },
+        { type: "done", stopReason: "end_turn" },
       ]);
     });
 

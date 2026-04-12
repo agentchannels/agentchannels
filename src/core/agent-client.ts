@@ -7,6 +7,7 @@ export type { AgentStreamEvent, RawSessionEvent } from "./chunk-parser.js";
 export type {
   TextDeltaEvent,
   ToolUseEvent,
+  ToolResultEvent,
   ThinkingEvent,
   StatusEvent,
   DoneEvent,
@@ -236,14 +237,7 @@ export class AgentClient {
       });
 
       for await (const event of stream) {
-        if (event.type === "agent.message") {
-          console.log(`[AgentClient] Received agent.message event: ${JSON.stringify(event, undefined, 2)}`);
-        } else if (event.type === "agent.tool_use") {
-    console.log(`\n[Using tool: ${event.name}]`);
-  } else if (event.type === "session.status_idle") {
-    console.log("\n\nAgent finished.");
-    break;
-  }
+        console.log(`[AgentClient] Received event: ${JSON.stringify(event, undefined, 2)}`);
 
         // Check for abort signal between events
         if (signal?.aborted) {

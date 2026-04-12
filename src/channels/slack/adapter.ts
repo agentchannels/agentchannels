@@ -57,6 +57,7 @@ export class SlackAdapter implements ChannelAdapter {
   }
 
   async sendMessage(channelId: string, threadId: string, text: string): Promise<void> {
+    console.log(`[slack] Sending message to ${channelId}:${threadId}: ${text.substring(0, 80)}`);
     await this.app.client.chat.postMessage({
       token: this.config.botToken,
       channel: channelId,
@@ -69,6 +70,7 @@ export class SlackAdapter implements ChannelAdapter {
     const client = this.app.client as any;
     const tok = this.config.botToken;
 
+    console.log(`[slack] Starting stream in ${channelId}:${threadId}`);
     // Slack Agent SDK streaming with plan mode for task indicators
     const result = await client.chat.startStream({
       token: tok,
@@ -80,6 +82,7 @@ export class SlackAdapter implements ChannelAdapter {
 
     return {
       append: async (delta: string) => {
+        console.log(`[slack] Appending to stream in ${channelId}:${threadId}: ${delta.substring(0, 80)}`);
         if (!delta) return;
         await client.chat.appendStream({
           token: tok,
@@ -89,6 +92,7 @@ export class SlackAdapter implements ChannelAdapter {
         });
       },
       appendTasks: async (tasks: StreamTask[]) => {
+        console.log(`[slack] Updating tasks in ${channelId}:${threadId}: ${tasks.length} tasks`);
         if (tasks.length === 0) return;
         await client.chat.appendStream({
           token: tok,
@@ -103,6 +107,7 @@ export class SlackAdapter implements ChannelAdapter {
         });
       },
       finish: async (finalText?: string) => {
+        console.log(`[slack] Finishing stream in ${channelId}:${threadId} with final text: ${finalText?.substring(0, 80)}`);
         await client.chat.stopStream({
           token: tok,
           channel: channelId,
@@ -120,6 +125,7 @@ export class SlackAdapter implements ChannelAdapter {
    * Shows a status indicator with rotating loading messages.
    */
   async setStatus(channelId: string, threadId: string, status: string): Promise<void> {
+    console.log(`[slack] Setting status in ${channelId}:${threadId} to: ${status}`);
     const client = this.app.client as any;
     await client.assistant.threads.setStatus({
       channel_id: channelId,
@@ -132,6 +138,7 @@ export class SlackAdapter implements ChannelAdapter {
    * Clear the agent loading status.
    */
   async clearStatus(channelId: string, threadId: string): Promise<void> {
+    console.log(`[slack] Clearing status in ${channelId}:${threadId}`); 
     await this.setStatus(channelId, threadId, "");
   }
 
