@@ -114,31 +114,33 @@ export class RailwayClient {
   }
 
   /** Set a Docker image as the service source */
-  async setServiceImage(serviceId: string, image: string): Promise<void> {
+  async setServiceImage(
+    serviceId: string,
+    environmentId: string,
+    image: string,
+  ): Promise<void> {
     await this.query(
-      `mutation($id: String!, $input: ServiceInstanceUpdateInput!) {
-        serviceInstanceUpdate(serviceId: $id, input: $input) { id }
+      `mutation($serviceId: String!, $environmentId: String, $input: ServiceInstanceUpdateInput!) {
+        serviceInstanceUpdate(serviceId: $serviceId, environmentId: $environmentId, input: $input)
       }`,
       {
-        id: serviceId,
+        serviceId,
+        environmentId,
         input: { source: { image } },
       },
     );
   }
 
-  /** Trigger a deploy */
+  /** Trigger a deploy for a service */
   async triggerDeploy(
-    projectId: string,
-    environmentId: string,
     serviceId: string,
+    environmentId: string,
   ): Promise<void> {
     await this.query(
-      `mutation($input: EnvironmentTriggersDeployInput!) {
-        environmentTriggersDeploy(input: $input)
+      `mutation($serviceId: String!, $environmentId: String!) {
+        serviceInstanceDeploy(serviceId: $serviceId, environmentId: $environmentId)
       }`,
-      {
-        input: { projectId, environmentId, serviceId },
-      },
+      { serviceId, environmentId },
     );
   }
 
@@ -196,7 +198,8 @@ export class RailwayClient {
     });
 
     if (!response.ok) {
-      throw new Error(`Railway API error: ${response.status} ${response.statusText}`);
+      const body = await response.text().catch(() => "");
+      throw new Error(`Railway API error: ${response.status} ${response.statusText}${body ? ` — ${body}` : ""}`);
     }
 
     const json = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };

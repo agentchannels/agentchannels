@@ -32,16 +32,24 @@ function maskValue(value: string): string {
 }
 
 export async function deployRailway(): Promise<void> {
-  console.log("\n:railway_car: AgentChannels — Deploy to Railway\n");
+  console.log("\nAgentChannels — Deploy to Railway\n");
 
-  // Step 1: Get Railway API token
-  console.log("You need a Railway API token to deploy.");
-  console.log("Create one at: https://railway.com/account/tokens\n");
+  // Step 1: Get Railway API token from env or prompt
+  const envToken = process.env.RAILWAY_API_TOKEN || readEnvFile().RAILWAY_API_TOKEN;
+  let token: string;
 
-  const token = await password({
-    message: "Railway API Token:",
-    validate: (v) => (v.trim().length > 0 ? true : "Token is required"),
-  });
+  if (envToken) {
+    console.log("Using RAILWAY_API_TOKEN from environment.\n");
+    token = envToken;
+  } else {
+    console.log("You need a Railway API token to deploy.");
+    console.log("Create one at: https://railway.com/account/tokens\n");
+
+    token = await password({
+      message: "Railway API Token:",
+      validate: (v) => (v.trim().length > 0 ? true : "Token is required"),
+    });
+  }
 
   // Step 2: Verify token
   const client = new RailwayClient({ token });
@@ -155,12 +163,12 @@ export async function deployRailway(): Promise<void> {
   // Step 5: Deploy using the agentchannels Docker image
   console.log("\nConfiguring deployment...");
   try {
-    await client.setServiceImage(service.id, "ghcr.io/agentchannels/agentchannels:latest");
+    await client.setServiceImage(service.id, environmentId, "ghcr.io/agentchannels/agentchannels:latest");
     console.log("Service configured with agentchannels Docker image.");
 
     // Trigger deployment
     console.log("Triggering deployment...");
-    await client.triggerDeploy(project.id, environmentId, service.id);
+    await client.triggerDeploy(service.id, environmentId);
     console.log("Deployment triggered. Railway is pulling and starting the image...");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
