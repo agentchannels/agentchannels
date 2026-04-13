@@ -1,17 +1,19 @@
 # agentchannels
 
-**Chat with Claude agents in Slack.**
+Agent Channels (`ach`) is a CLI that bridges your communicatino channels, such as Slack, to agents like [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/). Mention the bot in any channel or DM and each thread becomes a multi-turn streaming session with your agent — tools, vaults, and all.
 
-Your team talks to a [Claude Managed Agent](https://platform.claude.com/docs/en/managed-agents/) through Slack threads — each thread is a conversation, responses stream back in real time.
+<p align="center">
+  <img src="docs/assets/demo.gif" alt="Paperclip — runs your business" width="720" />
+</p>
 
-<!-- TODO: Add screenshot/GIF of a Slack thread conversation with the bot -->
+## Agent Channels is right for you if
 
-## Why
-
-- **Team access** — your whole team can talk to your Claude agent through Slack, no API keys needed per person
-- **Threads = conversations** — each Slack thread maps to one agent session with full multi-turn context
-- **Streaming** — responses appear in real time, not a 30-second wait for a wall of text
-- **3 commands** to go from zero to a running bot
+- ✅ You've built (or want to build) a **Claude Managed Agent** and need to put it in front of a team
+- ✅ You want to **build agents once** and provide them across multiple channels
+- ✅ You want to **provide your agents to your colleagues through Slack**, without building a separate app for them
+- ✅ You **don't want to build messy connectors** between agents and communication channels yourself
+- ✅ You want **multi-turn conversations** per thread, not one-shot Q&A bots
+- ✅ You want **streaming responses** that appear in real time, not 30-second waits for a wall of text
 
 ## Quick Start
 
@@ -134,10 +136,25 @@ agentchannels uses Socket Mode (WebSocket), so it works anywhere that runs persi
 ## How It Works
 
 ```
-Slack thread  -->  agentchannels (ach serve)  -->  Claude Managed Agent
-  @mention          Socket Mode listener            session per thread
-  reply in thread   <-- streaming response <--      multi-turn memory
+     ┌─────────────────┐      ┌──────────────────────┐      ┌────────────────────┐
+     │                 │      │                      │      │                    │
+     │   Slack thread  │◀────▶│   ach serve (you)    │◀────▶│  Claude Managed    │
+     │                 │      │                      │      │      Agent         │
+     │  @mention       │      │  Socket Mode         │      │                    │
+     │  reply in       │─────▶│  listener +          │─────▶│  session per       │
+     │    thread       │      │  streaming bridge    │      │    thread          │
+     │                 │◀─────│                      │◀─────│  multi-turn        │
+     │  user @mention  │      │  channel-agnostic    │      │    memory + tools  │
+     │                 │      │  adapter             │      │                    │
+     └─────────────────┘      └──────────────────────┘      └────────────────────┘
+        WebSocket                 long-lived Node                 Anthropic API
+        (no public URL)           process (your host)             (beta sessions)
 ```
+
+1. A teammate @mentions the bot in Slack — Slack pushes the event over the Socket Mode WebSocket.
+2. `ach serve` looks up (or creates) a Claude Managed Agent session keyed on the thread.
+3. Your message is sent to the agent; responses stream back token-by-token.
+4. `ach` routes each text delta, tool call, and thinking step into Slack's native streaming API so the thread updates live.
 
 ## License
 
