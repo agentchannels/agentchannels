@@ -19,6 +19,12 @@ export function buildSlackManifest(options: SlackManifestOptions): object {
       background_color: '#6C47FF',
     },
     features: {
+      assistant_view: {
+        assistant_description: appDescription,
+        suggested_prompts: [
+          { title: "What can you do?", message: "What can you help me with?" },
+        ],
+      },
       app_home: {
         home_tab_enabled: false,
         messages_tab_enabled: true,
@@ -33,6 +39,7 @@ export function buildSlackManifest(options: SlackManifestOptions): object {
       scopes: {
         bot: [
           'app_mentions:read',
+          'assistant:write',
           'channels:history',
           'channels:read',
           'chat:write',
