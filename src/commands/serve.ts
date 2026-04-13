@@ -41,11 +41,16 @@ export async function runServe(overrides: ConfigOverrides = {}): Promise<void> {
   const config = resolveConfig(overrides);
 
   console.log("[serve] Starting agentchannels server...");
+  console.log(`[serve]   Agent:       ${config.agentId}`);
+  console.log(`[serve]   Environment: ${config.environmentId}`);
 
   // Initialize the agent client
   const vaultIds = config.vaultIds
     ? config.vaultIds.split(",").map((id) => id.trim()).filter(Boolean)
     : undefined;
+  if (vaultIds && vaultIds.length > 0) {
+    console.log(`[serve]   Vaults:      ${vaultIds.join(", ")}`);
+  }
   const agentClient = new AgentClient({
     apiKey: config.anthropicApiKey,
     agentId: config.agentId,
