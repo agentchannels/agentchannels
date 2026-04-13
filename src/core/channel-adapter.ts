@@ -95,8 +95,16 @@ export interface StreamHandle {
   /** Update plan task indicators (thinking, tool use steps). */
   appendTasks?(tasks: StreamTask[]): Promise<void>;
 
-  /** Finalize the stream with optional final text. */
-  finish(finalText?: string): Promise<void>;
+  /**
+   * Finalize the stream with optional final text and/or final task state.
+   *
+   * Adapters MUST send any provided `finalTasks` atomically together with
+   * the closing operation — Slack's `chat.stopStream` can overtake a
+   * just-sent `chat.appendStream`, leaving the plan block in a stale
+   * state (e.g. tasks frozen as "error"). Bundling the terminal task
+   * update into the close call eliminates the race.
+   */
+  finish(finalText?: string, finalTasks?: StreamTask[]): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

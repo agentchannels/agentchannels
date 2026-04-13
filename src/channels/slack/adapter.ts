@@ -116,40 +116,86 @@ export class SlackAdapter implements ChannelAdapter {
     });
     const messageTs = result.ts!;
 
+    // Serialize all calls on this streaming message onto a single chain.
+    // Slack's `chat.appendStream` / `chat.stopStream` are not safe for
+    // concurrent invocations against the same `ts`: `append` (text) and
+    // `appendTasks` (plan-mode chunks) fired in parallel end up dropping one
+    // (message loses either the body or a task_update), and a `stopStream`
+    // racing a pending append freezes that chunk as an error in the rendered
+    // plan. Every call goes through `enqueue` so Slack receives them in the
+    // exact order we emit them.
+    let chain: Promise<void> = Promise.resolve();
+    const enqueue = <T>(label: string, op: () => Promise<T>): Promise<T> => {
+      const next = chain.then(
+        () => op(),
+        () => op(),
+      );
+      chain = next.then(
+        () => undefined,
+        (err) => {
+          console.error(`[slack] stream op "${label}" failed:`, err);
+        },
+      );
+      return next;
+    };
+
     return {
-      append: async (delta: string) => {
-        if (!delta) return;
-        await client.chat.appendStream({
-          token: tok,
-          channel: channelId,
-          ts: messageTs,
-          chunks: [{ type: "markdown_text", text: delta }],
-        });
-      },
-      appendTasks: async (tasks: StreamTask[]) => {
-        if (tasks.length === 0) return;
-        await client.chat.appendStream({
-          token: tok,
-          channel: channelId,
-          ts: messageTs,
-          chunks: tasks.map((t) => ({
-            type: "task_update" as const,
-            id: t.id,
-            title: t.text,
-            status: t.status,
-          })),
-        });
-      },
-      finish: async (finalText?: string) => {
-        await client.chat.stopStream({
-          token: tok,
-          channel: channelId,
-          ts: messageTs,
-          ...(finalText
-            ? { chunks: [{ type: "markdown_text" as const, text: finalText }] }
-            : {}),
-        });
-      },
+      append: (delta: string) =>
+        enqueue("append", async () => {
+          if (!delta) return;
+          await client.chat.appendStream({
+            token: tok,
+            channel: channelId,
+            ts: messageTs,
+            chunks: [{ type: "markdown_text", text: delta }],
+          });
+        }),
+      appendTasks: (tasks: StreamTask[]) =>
+        enqueue("appendTasks", async () => {
+          if (tasks.length === 0) return;
+          await client.chat.appendStream({
+            token: tok,
+            channel: channelId,
+            ts: messageTs,
+            chunks: tasks.map((t) => ({
+              type: "task_update" as const,
+              id: t.id,
+              title: t.text,
+              status: t.status,
+            })),
+          });
+        }),
+      finish: (finalText?: string, finalTasks?: StreamTask[]) =>
+        enqueue("finish", async () => {
+          // Bundle any final task_update chunks together with the closing
+          // stopStream so they land atomically. Sending tasks via a separate
+          // appendStream immediately before stopStream is not reliable —
+          // Slack's backend can apply stopStream first and freeze any
+          // still-in_progress task as "error" in the rendered plan block.
+          const chunks: Array<
+            | { type: "markdown_text"; text: string }
+            | { type: "task_update"; id: string; title: string; status: StreamTask["status"] }
+          > = [];
+          if (finalTasks && finalTasks.length > 0) {
+            for (const t of finalTasks) {
+              chunks.push({
+                type: "task_update",
+                id: t.id,
+                title: t.text,
+                status: t.status,
+              });
+            }
+          }
+          if (finalText) {
+            chunks.push({ type: "markdown_text", text: finalText });
+          }
+          await client.chat.stopStream({
+            token: tok,
+            channel: channelId,
+            ts: messageTs,
+            ...(chunks.length > 0 ? { chunks } : {}),
+          });
+        }),
     };
   }
 

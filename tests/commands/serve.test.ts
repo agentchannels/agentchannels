@@ -223,9 +223,13 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
-      // Stream is started eagerly, so empty response goes through stream.finish()
+      // Stream is started eagerly, so empty response goes through stream.finish().
+      // The bridge also bundles the final plan-mode task snapshot into finish()
+      // so it lands atomically with stopStream (avoids a Slack-side race), hence
+      // the second arg is the tasks array — we just care about the text here.
       expect(mockStream.finish).toHaveBeenCalledWith(
         "I received your message but had no response.",
+        expect.anything(),
       );
     });
 
@@ -259,7 +263,10 @@ describe("handleMessage", () => {
 
       await handleMessage(adapter, agentClient, sessionManager, message);
 
-      expect(mockStream.finish).toHaveBeenCalledWith(expect.stringContaining("Context window exceeded"));
+      expect(mockStream.finish).toHaveBeenCalledWith(
+        expect.stringContaining("Context window exceeded"),
+        expect.anything(),
+      );
     });
 
     it("final stream contains only text deltas, not thinking or tool events", async () => {
@@ -304,6 +311,7 @@ describe("handleMessage", () => {
       // Stream is started eagerly, so error goes through stream.finish()
       expect(mockStream.finish).toHaveBeenCalledWith(
         expect.stringContaining("Invalid request payload"),
+        expect.anything(),
       );
     });
 

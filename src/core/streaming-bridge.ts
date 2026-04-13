@@ -387,9 +387,17 @@ export class StreamingBridge {
       let taskCounter = 0;
       let thinkingId = 0;
 
+      // Channel adapters (e.g. SlackAdapter.startStream) are responsible for
+      // serialising concurrent calls on a single stream, so successive
+      // `sendTasks()` invocations never race text appends or stopStream.
       const sendTasks = async () => {
         if (!stream?.appendTasks || tasks.length === 0) return;
-        await stream.appendTasks([...tasks]).catch(() => {});
+        await stream.appendTasks([...tasks]).catch((err) => {
+          console.error(
+            `[streaming-bridge] appendTasks failed for ${channelId}:${threadId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        });
       };
 
       const markAllComplete = () => {
@@ -398,7 +406,14 @@ export class StreamingBridge {
         }
       };
 
-      // Add initial task right after stream starts
+      // Seed the plan block with the initial task so the user sees something
+      // while the agent is thinking. Subsequent state changes are mutated
+      // in-memory only; the final sendTasks() call after reader.start()
+      // returns pushes the terminal state. We intentionally avoid calling
+      // sendTasks() from intermediate event handlers: Slack's chat.appendStream
+      // drops or reorders chunks when many are sent in rapid sequence on the
+      // same streaming message, which causes tasks to be frozen as "error" or
+      // the body text to go missing when stopStream lands.
       tasks.push({ id: "init", text: "Initializing...", status: "in_progress" });
       await sendTasks();
 
@@ -406,17 +421,21 @@ export class StreamingBridge {
         streamError = event.error;
       });
 
-      reader.on("done", async () => {
-        markAllComplete();
-        await sendTasks();
-        if (this.adapter.clearStatus) {
-          await this.adapter.clearStatus(channelId, threadId).catch(() => {});
-        }
-      });
+      // Note: finalization (markAllComplete + final sendTasks) runs inline
+      // after reader.start() resolves — not inside a `done` listener.
+      // Node's EventEmitter does not await async listeners, so a handler here
+      // would race with stream.finish() below; Slack closes the stream with
+      // any still-in_progress task frozen as "failed" before the "complete"
+      // task_update lands.
 
       reader.on("text_delta", async (event) => {
         fullText += event.text;
-        await stream!.append(event.text).catch(() => {});
+        await stream!.append(event.text).catch((err) => {
+          console.error(
+            `[streaming-bridge] text append failed for ${channelId}:${threadId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        });
         updateCount++;
       });
 
@@ -445,10 +464,12 @@ export class StreamingBridge {
           label = "Thinking...";
         }
         tasks.push({ id, text: label, status: "in_progress" });
-        await sendTasks();
+        // No sendTasks() here — intermediate task updates are mutated
+        // in-memory and flushed once after reader.start() to avoid racing
+        // Slack's chat.appendStream semantics.
       });
 
-      reader.on("tool_use", async (event) => {
+      reader.on("tool_use", (event) => {
         for (const t of tasks) {
           if (t.id.startsWith("thinking_") && t.status === "in_progress") {
             t.status = "complete";
@@ -457,10 +478,9 @@ export class StreamingBridge {
         const description = describeToolUse(event.name, event.input);
         const toolId = `tool_${++taskCounter}`;
         tasks.push({ id: toolId, text: description, status: "in_progress" });
-        await sendTasks();
       });
 
-      reader.on("tool_result", async (event) => {
+      reader.on("tool_result", (event) => {
         for (let i = tasks.length - 1; i >= 0; i--) {
           if (tasks[i].id.startsWith("tool_") && tasks[i].status === "in_progress") {
             if (event.name) {
@@ -470,11 +490,19 @@ export class StreamingBridge {
             break;
           }
         }
-        await sendTasks();
       });
 
       try {
         await reader.start();
+
+        // On the success path, mark remaining tasks complete so the
+        // terminal state is bundled into stream.finish() below. The
+        // adapter sends the final task_update atomically with stopStream
+        // — avoiding the race where a separate appendStream gets
+        // overtaken by the close and tasks end up frozen as "error".
+        if (!streamError) {
+          markAllComplete();
+        }
       } finally {
         console.log(`[streaming-bridge] Stream ended for ${channelId}:${threadId}. Total chars: ${fullText.length}, updates: ${updateCount}, error: ${streamError}`);
         if (this.adapter.clearStatus) {
@@ -484,9 +512,14 @@ export class StreamingBridge {
 
       // Phase 4: Complete or error
 
+      // Snapshot the final tasks array so the adapter can bundle it into
+      // the close call atomically with the text payload. Always a fresh
+      // copy to decouple from any post-hoc mutation.
+      const finalTasksSnapshot = tasks.length > 0 ? [...tasks] : undefined;
+
       if (streamError) {
         this.emitPhase(threadKey, "error", streamError);
-        await stream.finish(this.formatError(streamError));
+        await stream.finish(this.formatError(streamError), finalTasksSnapshot);
         return {
           sessionCreated,
           sessionId,
@@ -499,9 +532,9 @@ export class StreamingBridge {
 
       this.emitPhase(threadKey, "completing");
       if (fullText.length > 0) {
-        await stream.finish();
+        await stream.finish(undefined, finalTasksSnapshot);
       } else {
-        await stream.finish(this.emptyResponseText);
+        await stream.finish(this.emptyResponseText, finalTasksSnapshot);
       }
 
       return {
