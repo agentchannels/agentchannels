@@ -93,6 +93,7 @@ All config can be provided via **environment variables**, a **`.env` file**, or 
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `CLAUDE_AGENT_ID` | Claude Managed Agent ID |
 | `CLAUDE_ENVIRONMENT_ID` | Claude Environment ID |
+| `CLAUDE_VAULT_IDS` | Comma-separated [vault](https://platform.claude.com/docs/en/managed-agents/vaults) IDs for MCP authentication (optional) |
 | `SLACK_BOT_TOKEN` | Slack bot token (`xoxb-...`) |
 | `SLACK_APP_TOKEN` | Slack app-level token (`xapp-...`) for Socket Mode |
 | `SLACK_SIGNING_SECRET` | Slack signing secret |

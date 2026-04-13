@@ -21,6 +21,7 @@ export interface AgentClientConfig {
   apiKey: string;
   agentId?: string;
   environmentId?: string;
+  vaultIds?: string[];
 }
 
 /**
@@ -61,6 +62,7 @@ export class AgentClient {
   private client: Anthropic;
   private agentId: string | undefined;
   private environmentId: string | undefined;
+  private vaultIds: string[] | undefined;
 
   constructor(config: AgentClientConfig) {
     if (!config.apiKey) {
@@ -69,6 +71,7 @@ export class AgentClient {
     this.client = new Anthropic({ apiKey: config.apiKey });
     this.agentId = config.agentId;
     this.environmentId = config.environmentId;
+    this.vaultIds = config.vaultIds;
   }
 
   /**
@@ -167,11 +170,13 @@ export class AgentClient {
   async createSession(params?: {
     agentId?: string;
     environmentId?: string;
+    vaultIds?: string[];
     title?: string;
     metadata?: Record<string, string>;
   }): Promise<string> {
     const agentId = params?.agentId ?? this.agentId;
     const envId = params?.environmentId ?? this.environmentId;
+    const vaultIds = params?.vaultIds ?? this.vaultIds;
 
     if (!agentId) {
       throw new Error("No agent ID configured. Set CLAUDE_AGENT_ID or pass agentId.");
@@ -183,6 +188,7 @@ export class AgentClient {
     const session = await this.client.beta.sessions.create({
       agent: agentId,
       environment_id: envId,
+      ...(vaultIds && vaultIds.length > 0 ? { vault_ids: vaultIds } : {}),
       title: params?.title,
       metadata: params?.metadata,
     });
