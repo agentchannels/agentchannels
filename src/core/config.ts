@@ -11,6 +11,7 @@ export const ENV_VAR_MAP = {
   anthropicApiKey: "ANTHROPIC_API_KEY",
   agentId: "CLAUDE_AGENT_ID",
   environmentId: "CLAUDE_ENVIRONMENT_ID",
+  vaultIds: "CLAUDE_VAULT_IDS",
   slackBotToken: "SLACK_BOT_TOKEN",
   slackAppToken: "SLACK_APP_TOKEN",
   slackSigningSecret: "SLACK_SIGNING_SECRET",
@@ -26,6 +27,7 @@ const ConfigSchema = z.object({
   anthropicApiKey: z.string().min(1, "ANTHROPIC_API_KEY is required"),
   agentId: z.string().min(1, "CLAUDE_AGENT_ID is required"),
   environmentId: z.string().min(1, "CLAUDE_ENVIRONMENT_ID is required"),
+  vaultIds: z.string().optional(),
   slackBotToken: z.string().min(1, "SLACK_BOT_TOKEN is required"),
   slackAppToken: z.string().min(1, "SLACK_APP_TOKEN is required"),
   slackSigningSecret: z.string().optional(),
@@ -41,6 +43,7 @@ export interface ConfigOverrides {
   anthropicApiKey?: string;
   agentId?: string;
   environmentId?: string;
+  vaultIds?: string;
   slackBotToken?: string;
   slackAppToken?: string;
   slackSigningSecret?: string;
@@ -151,7 +154,7 @@ export function resolveConfig(overridesOrOptions?: ConfigOverrides | ResolveOpti
 
   // Replace undefined with empty string for required fields;
   // leave truly optional fields as undefined so Zod .optional() works correctly.
-  const optionalFields = new Set<string>(["slackSigningSecret"]);
+  const optionalFields = new Set<string>(["vaultIds", "slackSigningSecret"]);
   const forValidation: Record<string, string | undefined> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (optionalFields.has(key)) {

@@ -16,6 +16,7 @@ export function registerServeCommand(program: Command): void {
     .option("--anthropic-api-key <key>", "Anthropic API key")
     .option("--agent-id <id>", "Claude Managed Agent ID")
     .option("--environment-id <id>", "Claude Environment ID")
+    .option("--vault-ids <ids>", "Comma-separated vault IDs for MCP authentication")
     .option("--slack-bot-token <token>", "Slack Bot Token")
     .option("--slack-app-token <token>", "Slack App Token")
     .option("--slack-signing-secret <secret>", "Slack Signing Secret")
@@ -24,6 +25,7 @@ export function registerServeCommand(program: Command): void {
         anthropicApiKey: opts.anthropicApiKey,
         agentId: opts.agentId,
         environmentId: opts.environmentId,
+        vaultIds: opts.vaultIds,
         slackBotToken: opts.slackBotToken,
         slackAppToken: opts.slackAppToken,
         slackSigningSecret: opts.slackSigningSecret,
@@ -41,10 +43,14 @@ export async function runServe(overrides: ConfigOverrides = {}): Promise<void> {
   console.log("[serve] Starting agentchannels server...");
 
   // Initialize the agent client
+  const vaultIds = config.vaultIds
+    ? config.vaultIds.split(",").map((id) => id.trim()).filter(Boolean)
+    : undefined;
   const agentClient = new AgentClient({
     apiKey: config.anthropicApiKey,
     agentId: config.agentId,
     environmentId: config.environmentId,
+    vaultIds,
   });
 
   // Initialize session manager

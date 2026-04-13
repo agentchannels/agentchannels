@@ -354,7 +354,7 @@ describe("agent utilities", () => {
   describe("defaultAgentDescription", () => {
     it("returns the default agent description", () => {
       expect(defaultAgentDescription()).toBe(
-        "AgentChannels Slack bot powered by Claude",
+        "Agent Channels bot",
       );
     });
   });
