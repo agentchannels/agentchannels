@@ -415,7 +415,6 @@ export class StreamingBridge {
       });
 
       reader.on("text_delta", async (event) => {
-        console.log(`[streaming-bridge] Received text delta for ${channelId}:${threadId}: ${event.text.substring(0, 80)} (total chars: ${fullText.length})`);
         fullText += event.text;
         await stream!.append(event.text).catch(() => {});
         updateCount++;

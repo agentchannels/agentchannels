@@ -243,8 +243,6 @@ export class AgentClient {
       });
 
       for await (const event of stream) {
-        console.log(`[AgentClient] Received event: ${JSON.stringify(event, undefined, 2)}`);
-
         // Check for abort signal between events
         if (signal?.aborted) {
           yield { type: "error", error: "Stream aborted" };
