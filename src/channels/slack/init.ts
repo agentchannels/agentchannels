@@ -91,9 +91,11 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
   let signingSecret: string;
 
   let newRefreshToken: string | undefined;
+  let appId: string | undefined;
 
   if (setupMethod === 'automatic') {
     const credentials = await automaticSetup(appName, appDescription);
+    appId = credentials.appId;
     botToken = credentials.botToken;
     appToken = credentials.appToken;
     signingSecret = credentials.signingSecret;
@@ -200,7 +202,14 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
   }
 
   console.log('\n✅ Slack setup complete!');
-  console.log('   Next step: run `ach init agent` to configure your Claude agent.\n');
+  if (appId) {
+    console.log(`\n💡 Want a custom logo? Upload one at:`);
+    console.log(`   https://api.slack.com/apps/${appId}/general#edit`);
+  } else {
+    console.log(`\n💡 Want a custom logo? Upload one at:`);
+    console.log(`   https://api.slack.com/apps → select your app → Basic Information`);
+  }
+  console.log('\n   Next step: run `ach init agent` to configure your Claude agent.\n');
 
   return {
     appName,
@@ -218,6 +227,7 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
  * Credentials returned by the automatic setup flow.
  */
 interface AutomaticSetupCredentials {
+  appId: string;
   botToken: string;
   appToken: string;
   signingSecret: string;
@@ -351,6 +361,7 @@ async function _automaticSetupAttempt(
   console.log(`\n🎉 Slack app "${appName}" created and configured successfully!\n`);
 
   return {
+    appId,
     botToken,
     appToken,
     signingSecret,
