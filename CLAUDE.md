@@ -59,7 +59,7 @@ The core abstraction is the `ChannelAdapter` interface (`src/core/channel-adapte
 │  SlackAdapter (ChannelAdapter impl) — Socket Mode listener  │
 │  SlackPoster, ThreadResponder, RateLimiter, MessageBatcher  │
 │  init.ts — Slack app creation wizard                        │
-│  api.ts — Slack Configuration Token API client              │
+│  api.ts — Slack Refresh Token API client                    │
 │  oauth.ts — local OAuth server for app installation         │
 │  manifest.ts — Slack app manifest builder                   │
 └─────────────────────────────────────────────────────────────┘
@@ -145,7 +145,7 @@ Terminal events (`done`, `error` from session.error, `session.status_terminated`
 
 Three setup paths, all in `src/channels/slack/init.ts`:
 
-- **Automatic**: User provides a Configuration Refresh Token (xoxe-...) → `SlackApiClient.rotateConfigToken()` → `createAppFromManifest()` → local OAuth server (`oauth.ts`) opens browser for workspace install → prompts for app-level token (xapp-...)
+- **Automatic**: User provides a Refresh Token (xoxe-...) → `SlackApiClient.rotateConfigToken()` → `createAppFromManifest()` → local OAuth server (`oauth.ts`) opens browser for workspace install → prompts for app-level token (xapp-...)
 - **Guided**: Displays the JSON manifest, walks user through manual creation on api.slack.com, collects tokens via prompts
 - **Manual**: User already has all three tokens, enters them directly
 
@@ -183,6 +183,10 @@ Two parallel config systems exist:
 1. **`src/core/config.ts`** — Runtime config resolution for `ach serve`. Three-source precedence: CLI flags > `process.env` > `.env` file. Uses its own Zod schema with `resolveConfig()` (full validation) and `resolvePartialConfig()` (for init commands). `ConfigValidationError` provides structured error messages.
 
 2. **`src/config/`** — Env file utilities and Zod schemas for Slack/Agent tokens. `writeEnvFile()` merges with existing `.env`, creates backups, and tracks added/overwritten keys. Used by all init wizards.
+
+### Vault support
+
+Sessions can optionally reference vaults containing OAuth credentials for MCP tools. `CLAUDE_VAULT_IDS` (comma-separated) or `--vault-ids` CLI flag is parsed into a `string[]` and passed as `vault_ids` to `client.beta.sessions.create()`. Anthropic manages token refresh automatically.
 
 ### Session management
 
