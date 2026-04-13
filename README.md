@@ -15,6 +15,8 @@ Your team talks to a [Claude Managed Agent](https://platform.claude.com/docs/en/
 
 ## Quick Start
 
+Connect an existing [Claude Managed Agent](https://platform.claude.com/docs/en/managed-agents/quickstart) to Slack:
+
 ```bash
 # Install
 brew install agentchannels/tap/ach
@@ -22,19 +24,13 @@ brew install agentchannels/tap/ach
 # Set up your Slack app (interactive wizard)
 ach init slack
 
-# Create a Claude Managed Agent or connect an existing one
-ach init agent
-
-# Start the bot
-ach serve
+# Start the bot with your agent IDs
+ach serve --agent-id agent_... --environment-id env_...
 ```
 
 That's it. Mention your bot in any Slack channel and start chatting.
 
-> **Already have an agent?** If you created one via the [Managed Agents quickstart](https://platform.claude.com/docs/en/managed-agents/quickstart) using the `ant` CLI or SDK, just pass your IDs directly:
-> ```bash
-> ach init agent --agent-id agent_... --environment-id env_...
-> ```
+> **Don't have an agent yet?** Run `ach init agent` — the wizard will create a new Claude Managed Agent and Environment, then just run `ach serve`.
 
 ## Installation
 
@@ -88,15 +84,14 @@ pnpm link --global
 
 All config can be provided via **environment variables**, a **`.env` file**, or **CLI flags** (highest priority wins).
 
-| Variable | Description |
-|---|---|
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `CLAUDE_AGENT_ID` | Claude Managed Agent ID |
-| `CLAUDE_ENVIRONMENT_ID` | Claude Environment ID |
-| `CLAUDE_VAULT_IDS` | Comma-separated [vault](https://platform.claude.com/docs/en/managed-agents/vaults) IDs for MCP authentication (optional) |
-| `SLACK_BOT_TOKEN` | Slack bot token (`xoxb-...`) |
-| `SLACK_APP_TOKEN` | Slack app-level token (`xapp-...`) for Socket Mode |
-| `SLACK_SIGNING_SECRET` | Slack signing secret |
+| Variable | CLI flag | Description |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | `--anthropic-api-key` | Anthropic API key |
+| `CLAUDE_AGENT_ID` | `--agent-id` | Claude Managed Agent ID |
+| `CLAUDE_ENVIRONMENT_ID` | `--environment-id` | Claude Environment ID |
+| `CLAUDE_VAULT_IDS` | `--vault-ids` | Comma-separated [vault](https://platform.claude.com/docs/en/managed-agents/vaults) IDs for MCP authentication (optional) |
+| `SLACK_BOT_TOKEN` | `--slack-bot-token` | Slack bot token (`xoxb-...`) |
+| `SLACK_APP_TOKEN` | `--slack-app-token` | Slack app-level token (`xapp-...`) for Socket Mode |
 
 The `ach init slack` and `ach init agent` wizards write these to `.env` automatically — you shouldn't need to edit this file by hand.
 
@@ -114,11 +109,15 @@ Creates a new Claude Managed Agent and Environment, or validates existing ones. 
 
 Starts the bot. Connects to Slack via Socket Mode (no public URL needed), listens for @mentions and DMs, creates agent sessions per thread, streams responses back. Press `Ctrl+C` to stop.
 
-### `ach deploy railway`
-
-Deploys to [Railway](https://railway.com) with an interactive wizard — creates a project, pushes your env vars, and deploys the Docker image. Requires a [Railway API token](https://railway.com/account/tokens).
-
 ## Deploy
+
+### Railway
+
+```bash
+ach deploy railway
+```
+
+Interactive wizard that creates a project, pushes your env vars, and deploys the Docker image. Requires a [Railway API token](https://railway.com/account/tokens).
 
 ### Docker
 
@@ -130,7 +129,7 @@ docker run -d \
 
 ### Other platforms
 
-agentchannels uses Socket Mode (WebSocket), so it works anywhere that runs persistent processes — Railway, Fly.io, Render, any VPS. Not recommended for serverless (Lambda, Vercel) since agent responses can take 30+ seconds.
+agentchannels uses Socket Mode (WebSocket), so it works anywhere that runs persistent processes — Fly.io, Render, any VPS. Not recommended for serverless (Lambda, Vercel) since agent responses can take 30+ seconds.
 
 ## How It Works
 
