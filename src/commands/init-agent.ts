@@ -195,9 +195,10 @@ export async function initAgent(options: InitAgentOptions = {}): Promise<void> {
     }
   } else {
     // Interactive mode
+    let useExisting = false;
     if (existingAgentId) {
       console.log(`📋 Found existing CLAUDE_AGENT_ID: ${existingAgentId}`);
-      const useExisting = await confirm({
+      useExisting = await confirm({
         message: "Use this existing agent?",
         default: true,
       });
@@ -225,7 +226,7 @@ export async function initAgent(options: InitAgentOptions = {}): Promise<void> {
 
     if (mode === "existing") {
       const agentId =
-        existingAgentId && (await confirm({ message: "Use this existing agent?", default: true }).catch(() => false))
+        useExisting && existingAgentId
           ? existingAgentId
           : await input({
               message: "Enter your Claude Agent ID:",
