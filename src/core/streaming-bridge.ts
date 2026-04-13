@@ -127,6 +127,19 @@ const DEFAULT_RETRY_DELAY_MS = 1000;
 const DEFAULT_EMPTY_RESPONSE = "I received your message but had no response.";
 
 function defaultFormatError(error: string): string {
+  // Detect MCP auth failures and provide actionable guidance
+  if (/authorization token is invalid|token.*expired|initialize failed.*auth/i.test(error)) {
+    const serverMatch = error.match(/MCP server '([^']+)'/);
+    const serverName = serverMatch ? serverMatch[1] : "an MCP tool";
+    return (
+      `🔐 *${serverName}* requires authentication.\n\n` +
+      `The authorization token is invalid or expired. To fix this:\n` +
+      `1. Go to your vault settings at <https://console.anthropic.com|console.anthropic.com>\n` +
+      `2. Re-authorize the *${serverName}* connection\n` +
+      `3. Try your message again\n\n` +
+      `If you don't have a vault configured, ask your admin to set \`CLAUDE_VAULT_IDS\` with a vault containing ${serverName} credentials.`
+    );
+  }
   return `⚠️ Sorry, I encountered an error: ${error}`;
 }
 
