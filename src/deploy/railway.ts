@@ -32,7 +32,7 @@ function maskValue(value: string): string {
 }
 
 export async function deployRailway(): Promise<void> {
-  console.log("\nAgentChannels — Deploy to Railway\n");
+  console.log("\nAgent Channels — Deploy to Railway\n");
 
   // Step 1: Get Railway API token from env or prompt
   const envToken = process.env.RAILWAY_API_TOKEN || readEnvFile().RAILWAY_API_TOKEN;

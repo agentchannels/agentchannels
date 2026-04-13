@@ -1,5 +1,5 @@
 /**
- * Generates a Slack App Manifest for the AgentChannels bot.
+ * Generates a Slack App Manifest for the Agent Channels bot.
  *
  * @see https://api.slack.com/reference/manifests
  */

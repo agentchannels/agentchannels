@@ -191,5 +191,5 @@ export function defaultAgentName(): string {
  * Generate a default agent description.
  */
 export function defaultAgentDescription(): string {
-  return "AgentChannels Slack bot powered by Claude";
+  return "Agent Channels bot";
 }

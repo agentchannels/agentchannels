@@ -27,7 +27,7 @@ export interface OAuthInstallResult {
 
 /**
  * Update the app manifest to include the OAuth redirect URL.
- * Requires a configuration access token (from tooling.tokens.rotate).
+ * Requires an access token (from tooling.tokens.rotate).
  */
 export async function addRedirectUrl(
   accessToken: string,
@@ -153,7 +153,7 @@ export function runOAuthInstall(options: OAuthInstallOptions): Promise<OAuthInst
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(htmlPage(
           'Installed!',
-          `AgentChannels bot installed to <strong>${teamName}</strong>. You can close this tab.`,
+          `Agent Channels bot installed to <strong>${teamName}</strong>. You can close this tab.`,
           true,
         ));
 
@@ -209,7 +209,7 @@ function htmlPage(title: string, body: string, success: boolean): string {
   const color = success ? '#2ea44f' : '#d73a49';
   return `<!DOCTYPE html>
 <html>
-<head><title>AgentChannels — ${title}</title></head>
+<head><title>Agent Channels — ${title}</title></head>
 <body style="font-family: -apple-system, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
   <div style="text-align: center;">
     <h1 style="color: ${color};">${title}</h1>
