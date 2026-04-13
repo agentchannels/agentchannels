@@ -39,6 +39,11 @@ export class SlackAdapter implements ChannelAdapter {
   }
 
   async connect(): Promise<void> {
+    // Pre-flight check: verify the app token can open a Socket Mode connection.
+    // Bolt's SocketModeClient treats missing_scope as recoverable and silently
+    // retries forever, so we catch it early with a clear error message.
+    await this.verifySocketModeAccess();
+
     await this.app.start();
 
     try {
@@ -48,6 +53,34 @@ export class SlackAdapter implements ChannelAdapter {
       console.log(`[slack] Connected as @${authResult.user} (${this.botUserId}) in team ${this.teamId}`);
     } catch (err) {
       console.warn("[slack] Could not resolve bot user ID:", err);
+    }
+  }
+
+  /**
+   * Verify that the app token has the required scope for Socket Mode
+   * by calling `apps.connections.open` directly. This fails fast with
+   * a clear message instead of letting Bolt retry silently forever.
+   */
+  private async verifySocketModeAccess(): Promise<void> {
+    const resp = await fetch("https://slack.com/api/apps.connections.open", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.config.appToken}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+    });
+
+    const data = (await resp.json()) as { ok: boolean; error?: string };
+
+    if (!data.ok && data.error === "missing_scope") {
+      throw new Error(
+        "[slack] Failed to connect: missing_scope.\n\n"
+        + "This usually means Socket Mode is not enabled or the App-Level Token is missing the required scope.\n"
+        + "To fix this:\n"
+        + "  1. Enable Socket Mode: https://api.slack.com/apps → Settings → Socket Mode → toggle ON\n"
+        + '  2. Ensure your App-Level Token (xapp-...) has the "connections:write" scope:\n'
+        + "     Basic Information → App-Level Tokens → Generate Token and Scopes\n",
+      );
     }
   }
 

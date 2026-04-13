@@ -143,8 +143,10 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
     });
 
     if (setupMethod === 'manual') {
-      console.log('\n💡 The App-Level Token requires the "connections:write" scope for Socket Mode.');
-      console.log('   Generate one at: Basic Information → App-Level Tokens → Generate Token and Scopes\n');
+      console.log('\n💡 Before continuing, make sure your Slack app has:');
+      console.log('   1. Socket Mode enabled: Settings → Socket Mode → Enable Socket Mode');
+      console.log('   2. App-Level Token with "connections:write" scope:');
+      console.log('      Basic Information → App-Level Tokens → Generate Token and Scopes\n');
     }
 
     appToken = await input({
