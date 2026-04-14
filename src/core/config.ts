@@ -15,6 +15,9 @@ export const ENV_VAR_MAP = {
   slackBotToken: "SLACK_BOT_TOKEN",
   slackAppToken: "SLACK_APP_TOKEN",
   slackSigningSecret: "SLACK_SIGNING_SECRET",
+  discordBotToken: "DISCORD_BOT_TOKEN",
+  discordApplicationId: "DISCORD_APPLICATION_ID",
+  discordPublicKey: "DISCORD_PUBLIC_KEY",
 } as const;
 
 export type ConfigKey = keyof typeof ENV_VAR_MAP;
@@ -37,6 +40,22 @@ export type Config = z.infer<typeof ConfigSchema>;
 export type PartialConfig = Partial<Config>;
 
 /**
+ * Schema for Discord serve-time configuration.
+ * Validates the fields required to run `ach serve discord`.
+ */
+const DiscordServeConfigSchema = z.object({
+  anthropicApiKey: z.string().min(1, "ANTHROPIC_API_KEY is required"),
+  agentId: z.string().min(1, "CLAUDE_AGENT_ID is required"),
+  environmentId: z.string().min(1, "CLAUDE_ENVIRONMENT_ID is required"),
+  vaultIds: z.string().optional(),
+  discordBotToken: z.string().min(1, "DISCORD_BOT_TOKEN is required"),
+  discordApplicationId: z.string().optional(),
+  discordPublicKey: z.string().optional(),
+});
+
+export type DiscordServeConfig = z.infer<typeof DiscordServeConfigSchema>;
+
+/**
  * CLI flag overrides — all fields are optional since flags may not be provided.
  */
 export interface ConfigOverrides {
@@ -47,6 +66,9 @@ export interface ConfigOverrides {
   slackBotToken?: string;
   slackAppToken?: string;
   slackSigningSecret?: string;
+  discordBotToken?: string;
+  discordApplicationId?: string;
+  discordPublicKey?: string;
 }
 
 // ─── .env file reader ──────────────────────────────────────────────────────
@@ -169,6 +191,45 @@ export function resolveConfig(overridesOrOptions?: ConfigOverrides | ResolveOpti
     const issues = result.error.issues.map((i) => `  - ${i.message}`).join("\n");
     throw new ConfigValidationError(
       `Configuration validation failed:\n${issues}`,
+      result.error.issues,
+    );
+  }
+
+  return result.data;
+}
+
+/**
+ * Resolves and validates Discord serve configuration from three sources:
+ *   1. CLI flags (overrides)  — highest priority
+ *   2. Environment variables  — medium priority
+ *   3. .env file values       — lowest priority
+ *
+ * Validates only the fields required for `ach serve discord`.
+ * Does NOT require Slack tokens.
+ *
+ * Throws a descriptive error if required fields are missing.
+ */
+export function resolveDiscordConfig(overridesOrOptions?: ConfigOverrides | ResolveOptions): DiscordServeConfig {
+  const options = normalizeOptions(overridesOrOptions);
+  const raw = resolveRawConfig(options);
+
+  // Replace undefined with empty string for required fields;
+  // leave truly optional fields as undefined so Zod .optional() works correctly.
+  const optionalFields = new Set<string>(["vaultIds", "discordApplicationId", "discordPublicKey"]);
+  const forValidation: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (optionalFields.has(key)) {
+      forValidation[key] = value || undefined;
+    } else {
+      forValidation[key] = value ?? "";
+    }
+  }
+
+  const result = DiscordServeConfigSchema.safeParse(forValidation);
+  if (!result.success) {
+    const issues = result.error.issues.map((i) => `  - ${i.message}`).join("\n");
+    throw new ConfigValidationError(
+      `Discord configuration validation failed:\n${issues}`,
       result.error.issues,
     );
   }
