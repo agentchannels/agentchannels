@@ -34,6 +34,8 @@ That's it. Mention your bot in any Slack channel and start chatting.
 
 > **Don't have an agent yet?** Run `ach init agent` — the wizard will create a new Claude Managed Agent and Environment, then just run `ach serve`.
 
+> **Prefer Claude Code?** Install the plugin (see [Installation](#installation) below), then run `/agentchannels:init-slack` and `/agentchannels:serve` inside Claude Code. Jump to [Use from Claude Code](#use-from-claude-code) for details.
+
 ## Installation
 
 <details>
@@ -46,7 +48,7 @@ claude plugin marketplace add agentchannels/agentchannels
 claude plugin install agentchannels@agentchannels
 ```
 
-Then use `/ach:init-slack` and `/ach:serve` inside Claude Code.
+Then use `/agentchannels:init-slack` and `/agentchannels:serve` inside Claude Code. See [Use from Claude Code](#use-from-claude-code) for what each skill does.
 
 To update: `claude plugin update agentchannels@agentchannels`
 </details>
@@ -125,6 +127,29 @@ Creates a new Claude Managed Agent and Environment, or validates existing ones. 
 ### `ach serve`
 
 Starts the bot. Connects to Slack via Socket Mode (no public URL needed), listens for @mentions and DMs, creates agent sessions per thread, streams responses back. Press `Ctrl+C` to stop.
+
+## Use from Claude Code
+
+Once the [Claude Code plugin](#installation) is installed, two slash commands are available. They wrap the CLI but let Claude gather your credentials conversationally — no terminal takeover, no remembering flags.
+
+### `/agentchannels:init-slack`
+
+Walks you through Slack app credential setup. Claude asks which path you want:
+
+- **Automatic** — you paste a Slack Refresh Token (`xoxe-...`); Claude runs `ach init slack --non-interactive --slack-refresh-token ...`, which creates the app via the Slack API and opens your browser for workspace install (blocks up to 5 minutes).
+- **Manual** — you already have bot token, app token, and signing secret; Claude passes them as inline env vars to `ach init slack --non-interactive` so they don't appear in `ps`.
+
+Writes credentials to `.env` on success. Claude will confirm the Slack app name with you before creating anything.
+
+### `/agentchannels:serve`
+
+Verifies `CLAUDE_AGENT_ID` and `CLAUDE_ENVIRONMENT_ID` are set, then launches `ach serve` in the background so the bridge keeps running while you keep using Claude Code. Claude can check whether the process is still alive via `ps`.
+
+> **Prereq**: Make sure you've run `ach init agent` (interactively) to create your Claude Managed Agent + Environment and written the IDs to `.env`. The `init-agent` skill is not part of v1.
+
+### How the skills work under the hood
+
+The plugin ships two `SKILL.md` files that instruct Claude to (1) gather credentials using `AskUserQuestion`, then (2) invoke the existing CLI via Bash with `--non-interactive`. There is no MCP server — the skills are thin glue over the CLI, so every CLI flag and env var is usable from Claude Code too.
 
 ## Deploy
 
