@@ -16,3 +16,4 @@ tests/e2e/fixtures/
 # oh-my-claudecode runtime state — contributor-local, not checked in
 .omc/*
 !.omc/skills/
+.ouroboros*

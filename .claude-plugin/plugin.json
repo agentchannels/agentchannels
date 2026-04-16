@@ -1,0 +1,22 @@
+{
+  "name": "agentchannels",
+  "version": "0.1.5",
+  "description": "Connect Claude Managed Agents to messaging channels like Slack — initialize Slack integrations and run the bridging server directly from Claude Code",
+  "author": {
+    "name": "AgentChannels"
+  },
+  "repository": "https://github.com/agentchannels/agentchannels",
+  "homepage": "https://github.com/agentchannels/agentchannels",
+  "license": "Apache-2.0",
+  "keywords": [
+    "claude",
+    "slack",
+    "agent",
+    "chatbot",
+    "managed-agents",
+    "anthropic",
+    "cli",
+    "agentchannels"
+  ],
+  "skills": "./skills/"
+}
