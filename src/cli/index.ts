@@ -4,7 +4,6 @@ import { createRequire } from "node:module";
 import { Command } from "commander";
 import { registerServeCommand } from "../commands/serve.js";
 import { initSlack } from "../channels/slack/init.js";
-import { initAgent } from "../commands/init-agent.js";
 import { deployRailway } from "../deploy/railway.js";
 
 const require = createRequire(import.meta.url);
@@ -23,12 +22,16 @@ registerServeCommand(program);
 // Init subcommands
 const initCmd = program
   .command("init")
-  .description("Initialize channel or agent configuration");
+  .description("Initialize channel configuration");
 
 initCmd
   .command("slack")
-  .description("Set up Slack app and credentials")
+  .description("Set up Slack app and credentials (also validates Anthropic API key)")
   .option("--non-interactive", "Run without prompts (infers path from provided credentials)")
+  .option("--anthropic-api-key <key>", "Anthropic API key — validated before Slack setup begins")
+  .option("--claude-agent-id <id>", "Claude Managed Agent ID — validated silently, written to .env")
+  .option("--claude-environment-id <id>", "Claude Environment ID — validated silently, written to .env")
+  .option("--claude-vault-ids <ids>", "Comma-separated Claude Vault IDs — each validated, invalid IDs are dropped with a warning")
   .option("--slack-bot-token <token>", "Slack Bot Token (xoxb-...)")
   .option("--slack-app-token <token>", "Slack App-Level Token (xapp-...)")
   .option("--slack-signing-secret <secret>", "Slack Signing Secret")
@@ -39,6 +42,10 @@ initCmd
     try {
       await initSlack({
         nonInteractive: opts.nonInteractive,
+        anthropicApiKey: opts.anthropicApiKey,
+        claudeAgentId: opts.claudeAgentId,
+        claudeEnvironmentId: opts.claudeEnvironmentId,
+        claudeVaultIds: opts.claudeVaultIds,
         slackBotToken: opts.slackBotToken,
         slackAppToken: opts.slackAppToken,
         slackSigningSecret: opts.slackSigningSecret,
@@ -52,31 +59,6 @@ initCmd
         process.exit(0);
       }
       console.error("\n❌ Slack setup failed:", (error as Error).message);
-      process.exit(1);
-    }
-  });
-
-initCmd
-  .command("agent")
-  .description("Create or validate a Claude Managed Agent and Environment")
-  .option("--anthropic-api-key <key>", "Anthropic API key")
-  .option("--agent-id <id>", "Existing Claude Agent ID to validate")
-  .option("--environment-id <id>", "Existing Environment ID to validate")
-  .option("--non-interactive", "Run without prompts (uses defaults or existing IDs)")
-  .action(async (opts) => {
-    try {
-      await initAgent({
-        anthropicApiKey: opts.anthropicApiKey,
-        agentId: opts.agentId,
-        environmentId: opts.environmentId,
-        nonInteractive: opts.nonInteractive,
-      });
-    } catch (error) {
-      if ((error as Error).name === "ExitPromptError") {
-        console.log("\n👋 Setup cancelled.");
-        process.exit(0);
-      }
-      console.error("\n❌ Agent setup failed:", (error as Error).message);
       process.exit(1);
     }
   });

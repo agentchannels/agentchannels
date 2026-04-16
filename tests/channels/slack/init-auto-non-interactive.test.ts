@@ -15,10 +15,36 @@ vi.mock('../../../src/channels/slack/oauth.js', () => ({
   }),
 }));
 
-// Mock writeEnvFile so tests don't write to disk
+// Mock writeEnvFile and readEnvFile so tests don't write to disk
 vi.mock('../../../src/config/env.js', () => ({
   writeEnvFile: vi.fn(),
+  readEnvFile: vi.fn().mockReturnValue({}),
 }));
+
+// Mock @anthropic-ai/sdk so API key validation doesn't make live network calls
+const mockAgentsList = vi.fn();
+const mockAgentsRetrieve = vi.fn();
+const mockAgentsCreate = vi.fn();
+vi.mock('@anthropic-ai/sdk', () => {
+  class MockAnthropic {
+    beta = {
+      agents: {
+        list: mockAgentsList,
+        retrieve: mockAgentsRetrieve,
+        create: mockAgentsCreate,
+      },
+      environments: {
+        list: vi.fn().mockResolvedValue({ data: [] }),
+        retrieve: vi.fn().mockRejectedValue(new Error('not found')),
+      },
+      vaults: {
+        retrieve: vi.fn().mockRejectedValue(new Error('not found')),
+      },
+    };
+    constructor(_opts?: unknown) {}
+  }
+  return { default: MockAnthropic };
+});
 
 import { addRedirectUrl, runOAuthInstall } from '../../../src/channels/slack/oauth.js';
 
@@ -273,6 +299,8 @@ describe('initSlack non-interactive auto path (via SLACK_REFRESH_TOKEN)', () => 
   // Use os.tmpdir() as cwd so resolvePartialConfig finds no .env file with Slack tokens
   const isolatedCwd = os.tmpdir();
 
+  const VALID_API_KEY = 'sk-ant-api03-valid-key-12345678901234567890';
+
   beforeEach(() => {
     vi.mocked(addRedirectUrl).mockResolvedValue(undefined);
     vi.mocked(runOAuthInstall).mockResolvedValue({
@@ -280,12 +308,18 @@ describe('initSlack non-interactive auto path (via SLACK_REFRESH_TOKEN)', () => 
       teamName: 'Test Workspace',
       teamId: 'T01TEST',
     });
+    // API key validation succeeds by default
+    mockAgentsList.mockResolvedValue({ data: [] });
 
-    // Clear any Slack env vars so they don't pollute path detection
+    // Clear any Slack, Anthropic, and agent env vars so they don't pollute path detection
     delete process.env.SLACK_BOT_TOKEN;
     delete process.env.SLACK_APP_TOKEN;
     delete process.env.SLACK_SIGNING_SECRET;
     delete process.env.SLACK_REFRESH_TOKEN;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.CLAUDE_AGENT_ID;
+    delete process.env.CLAUDE_ENVIRONMENT_ID;
+    delete process.env.CLAUDE_VAULT_IDS;
   });
 
   afterEach(() => {
@@ -301,6 +335,7 @@ describe('initSlack non-interactive auto path (via SLACK_REFRESH_TOKEN)', () => 
     const result = await initSlack({
       nonInteractive: true,
       skipEnvWrite: true,
+      anthropicApiKey: VALID_API_KEY,
       cwd: isolatedCwd,
     });
 
@@ -318,6 +353,7 @@ describe('initSlack non-interactive auto path (via SLACK_REFRESH_TOKEN)', () => 
     await initSlack({
       nonInteractive: true,
       skipEnvWrite: true,
+      anthropicApiKey: VALID_API_KEY,
       cwd: isolatedCwd,
       slackRefreshToken: REFRESH_TOKEN,
     });
@@ -339,6 +375,7 @@ describe('initSlack non-interactive auto path (via SLACK_REFRESH_TOKEN)', () => 
     const result = await initSlack({
       nonInteractive: true,
       skipEnvWrite: true,
+      anthropicApiKey: VALID_API_KEY,
       cwd: isolatedCwd,
       slackRefreshToken: REFRESH_TOKEN,
       appName: 'Custom Agent',
@@ -360,6 +397,7 @@ describe('initSlack non-interactive auto path (via SLACK_REFRESH_TOKEN)', () => 
     const result = await initSlack({
       nonInteractive: true,
       skipEnvWrite: true,
+      anthropicApiKey: VALID_API_KEY,
       cwd: isolatedCwd,
       slackRefreshToken: REFRESH_TOKEN,
     });
@@ -367,10 +405,16 @@ describe('initSlack non-interactive auto path (via SLACK_REFRESH_TOKEN)', () => 
     expect(result.appName).toBe('General Agent');
   });
 
-  it('throws when no credentials provided at all', async () => {
+  it('throws when no Slack credentials provided (API key present)', async () => {
+    await expect(
+      initSlack({ nonInteractive: true, anthropicApiKey: VALID_API_KEY, cwd: isolatedCwd }),
+    ).rejects.toThrow(/Non-interactive mode requires/);
+  });
+
+  it('throws ANTHROPIC_API_KEY required when API key is absent', async () => {
     await expect(
       initSlack({ nonInteractive: true, cwd: isolatedCwd }),
-    ).rejects.toThrow(/Non-interactive mode requires/);
+    ).rejects.toThrow(/ANTHROPIC_API_KEY is required/);
   });
 });
 
@@ -383,6 +427,7 @@ describe('initSlack non-interactive — refresh token takes precedence over manu
   const VALID_BOT_TOKEN = 'xoxb-manual-bot-token-1234567890';
   const VALID_APP_TOKEN = 'xapp-1-manual-app-token-9876543210';
   const VALID_SIGNING_SECRET = 'manual-signing-secret-abc123def456';
+  const VALID_API_KEY = 'sk-ant-api03-valid-key-12345678901234567890';
 
   beforeEach(() => {
     vi.mocked(addRedirectUrl).mockResolvedValue(undefined);
@@ -392,16 +437,26 @@ describe('initSlack non-interactive — refresh token takes precedence over manu
       teamId: 'T01TEST',
       botUserId: 'U01BOT',
     });
+    // API key validation succeeds by default
+    mockAgentsList.mockResolvedValue({ data: [] });
 
-    // Clear any Slack env vars
+    // Clear any Slack, Anthropic, and agent env vars
     delete process.env.SLACK_BOT_TOKEN;
     delete process.env.SLACK_APP_TOKEN;
     delete process.env.SLACK_SIGNING_SECRET;
     delete process.env.SLACK_REFRESH_TOKEN;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.CLAUDE_AGENT_ID;
+    delete process.env.CLAUDE_ENVIRONMENT_ID;
+    delete process.env.CLAUDE_VAULT_IDS;
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.CLAUDE_AGENT_ID;
+    delete process.env.CLAUDE_ENVIRONMENT_ID;
+    delete process.env.CLAUDE_VAULT_IDS;
   });
 
   it('uses auto path (token rotation) when refresh token and manual tokens are all provided via options', async () => {
@@ -411,6 +466,7 @@ describe('initSlack non-interactive — refresh token takes precedence over manu
     const result = await initSlack({
       nonInteractive: true,
       skipEnvWrite: true,
+      anthropicApiKey: VALID_API_KEY,
       cwd: isolatedCwd,
       // Auto path credentials
       slackRefreshToken: REFRESH_TOKEN,
@@ -432,6 +488,7 @@ describe('initSlack non-interactive — refresh token takes precedence over manu
   });
 
   it('invokes token rotation (not manual write) when refresh token env var is set alongside manual token env vars', async () => {
+    process.env.ANTHROPIC_API_KEY = VALID_API_KEY;
     process.env.SLACK_REFRESH_TOKEN = REFRESH_TOKEN;
     process.env.SLACK_BOT_TOKEN = VALID_BOT_TOKEN;
     process.env.SLACK_APP_TOKEN = VALID_APP_TOKEN;
@@ -468,6 +525,7 @@ describe('initSlack non-interactive — refresh token takes precedence over manu
     const result = await initSlack({
       nonInteractive: true,
       skipEnvWrite: true,
+      anthropicApiKey: VALID_API_KEY,
       cwd: isolatedCwd,
       slackRefreshToken: REFRESH_TOKEN,
     });

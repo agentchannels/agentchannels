@@ -6,7 +6,7 @@ Start the agentchannels bridge server, connecting Slack to Claude Managed Agents
 
 This skill starts the `ach serve` process in the background. It bridges incoming Slack messages to a Claude Managed Agent session and streams responses back into the Slack thread.
 
-Before starting the server, verify that all required credentials are available by reading the `.env` file in the current directory and checking the current environment. The user must have completed both `ach init slack` (or `/ach:init-slack`) and `ach init agent` before running this skill.
+Before starting the server, verify that all required credentials are available by reading the `.env` file in the current directory and checking the current environment. The user must have completed `/ach:init-slack` (which handles agent, environment, and Slack setup in one flow) before running this skill.
 
 ## Step 1 — Verify CLAUDE_AGENT_ID and CLAUDE_ENVIRONMENT_ID
 
@@ -29,7 +29,7 @@ Use the Read tool to check the `.env` file in the current directory for the foll
 > - `CLAUDE_AGENT_ID` — [present ✓ / **missing ✗**]
 > - `CLAUDE_ENVIRONMENT_ID` — [present ✓ / **missing ✗**]
 >
-> Please run `ach init agent` in your terminal to create a Claude Agent and Environment. Once that completes, run `/ach:serve` again.
+> Please run `/ach:init-slack` to create a Claude Agent, Environment, and Slack credentials. Once that completes, run `/ach:serve` again.
 
 Do not proceed past Step 1 if either variable is missing.
 
@@ -158,7 +158,7 @@ Report the result to the user:
   - `Configuration validation failed` → one or more required env vars are missing; guide the user to run the relevant init command
   - `invalid_auth` or `token_revoked` → Slack tokens are invalid; suggest re-running `/ach:init-slack`
   - `ECONNREFUSED` or network errors → check internet connectivity
-  - `CLAUDE_AGENT_ID` / `CLAUDE_ENVIRONMENT_ID` not found → run `ach init agent` first
+  - `CLAUDE_AGENT_ID` / `CLAUDE_ENVIRONMENT_ID` not found → run `/ach:init-slack` first to create the agent and environment
 
 ## Edge cases and warnings
 

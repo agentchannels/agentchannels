@@ -106,6 +106,20 @@ export class SlackAdapter implements ChannelAdapter {
     const client: WebClient = this.app.client;
     const tok = this.config.botToken;
 
+    // Lazily resolve teamId when connect() has not been called (e.g. in E2E tests).
+    // In production connect() always runs first, so this branch is a no-op there.
+    if (!this.teamId) {
+      try {
+        const authResult = await client.auth.test({ token: tok });
+        this.teamId = authResult.team_id as string;
+        if (!this.botUserId) {
+          this.botUserId = authResult.user_id as string;
+        }
+      } catch (err) {
+        console.warn("[slack] Could not resolve team ID for streaming:", err);
+      }
+    }
+
     const result = await client.chat.startStream({
       token: tok,
       channel: channelId,

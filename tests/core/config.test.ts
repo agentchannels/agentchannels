@@ -294,8 +294,140 @@ describe("ENV_VAR_MAP", () => {
     expect(ENV_VAR_MAP.anthropicApiKey).toBe("ANTHROPIC_API_KEY");
     expect(ENV_VAR_MAP.agentId).toBe("CLAUDE_AGENT_ID");
     expect(ENV_VAR_MAP.environmentId).toBe("CLAUDE_ENVIRONMENT_ID");
+    expect(ENV_VAR_MAP.vaultIds).toBe("CLAUDE_VAULT_IDS");
     expect(ENV_VAR_MAP.slackBotToken).toBe("SLACK_BOT_TOKEN");
     expect(ENV_VAR_MAP.slackAppToken).toBe("SLACK_APP_TOKEN");
     expect(ENV_VAR_MAP.slackSigningSecret).toBe("SLACK_SIGNING_SECRET");
+  });
+});
+
+// ─── ach serve .env contract (AC 15) ──────────────────────────────────────
+// These tests guard the contract that `ach serve` reads exactly these three
+// keys (CLAUDE_AGENT_ID, CLAUDE_ENVIRONMENT_ID, CLAUDE_VAULT_IDS) from .env
+// without any serve-side changes — matching what `ach init slack` writes.
+
+describe("ach serve .env key contract", () => {
+  it("reads CLAUDE_AGENT_ID from .env into agentId", () => {
+    const config = resolveConfig({
+      env: {},
+      dotEnv: {
+        ...fullDotEnv(),
+        CLAUDE_AGENT_ID: "agent-from-dotenv",
+      },
+    });
+    expect(config.agentId).toBe("agent-from-dotenv");
+  });
+
+  it("reads CLAUDE_ENVIRONMENT_ID from .env into environmentId", () => {
+    const config = resolveConfig({
+      env: {},
+      dotEnv: {
+        ...fullDotEnv(),
+        CLAUDE_ENVIRONMENT_ID: "env-from-dotenv",
+      },
+    });
+    expect(config.environmentId).toBe("env-from-dotenv");
+  });
+
+  it("reads CLAUDE_VAULT_IDS from .env into vaultIds (optional)", () => {
+    const config = resolveConfig({
+      env: {},
+      dotEnv: {
+        ...fullDotEnv(),
+        CLAUDE_VAULT_IDS: "vault-1,vault-2",
+      },
+    });
+    expect(config.vaultIds).toBe("vault-1,vault-2");
+  });
+
+  it("vaultIds is absent when CLAUDE_VAULT_IDS is not in .env", () => {
+    const dotEnv = { ...fullDotEnv() };
+    delete (dotEnv as Record<string, string>)["CLAUDE_VAULT_IDS"];
+    const config = resolveConfig({ env: {}, dotEnv });
+    expect(config.vaultIds).toBeUndefined();
+  });
+
+  it("CLAUDE_AGENT_ID in process.env takes precedence over .env file", () => {
+    const config = resolveConfig({
+      env: { CLAUDE_AGENT_ID: "agent-from-env" },
+      dotEnv: {
+        ...fullDotEnv(),
+        CLAUDE_AGENT_ID: "agent-from-dotenv",
+      },
+    });
+    expect(config.agentId).toBe("agent-from-env");
+  });
+
+  it("CLAUDE_ENVIRONMENT_ID in process.env takes precedence over .env file", () => {
+    const config = resolveConfig({
+      env: { CLAUDE_ENVIRONMENT_ID: "env-from-env" },
+      dotEnv: {
+        ...fullDotEnv(),
+        CLAUDE_ENVIRONMENT_ID: "env-from-dotenv",
+      },
+    });
+    expect(config.environmentId).toBe("env-from-env");
+  });
+
+  it("CLAUDE_VAULT_IDS in process.env takes precedence over .env file", () => {
+    const config = resolveConfig({
+      env: { CLAUDE_VAULT_IDS: "vault-from-env" },
+      dotEnv: {
+        ...fullDotEnv(),
+        CLAUDE_VAULT_IDS: "vault-from-dotenv",
+      },
+    });
+    expect(config.vaultIds).toBe("vault-from-env");
+  });
+
+  it("--agent-id CLI flag takes precedence over all sources", () => {
+    const config = resolveConfig({
+      overrides: { agentId: "agent-from-cli" },
+      env: { CLAUDE_AGENT_ID: "agent-from-env" },
+      dotEnv: {
+        ...fullDotEnv(),
+        CLAUDE_AGENT_ID: "agent-from-dotenv",
+      },
+    });
+    expect(config.agentId).toBe("agent-from-cli");
+  });
+
+  it("--environment-id CLI flag takes precedence over all sources", () => {
+    const config = resolveConfig({
+      overrides: { environmentId: "env-from-cli" },
+      env: { CLAUDE_ENVIRONMENT_ID: "env-from-env" },
+      dotEnv: {
+        ...fullDotEnv(),
+        CLAUDE_ENVIRONMENT_ID: "env-from-dotenv",
+      },
+    });
+    expect(config.environmentId).toBe("env-from-cli");
+  });
+
+  it("--vault-ids CLI flag takes precedence over all sources", () => {
+    const config = resolveConfig({
+      overrides: { vaultIds: "vault-from-cli" },
+      env: { CLAUDE_VAULT_IDS: "vault-from-env" },
+      dotEnv: {
+        ...fullDotEnv(),
+        CLAUDE_VAULT_IDS: "vault-from-dotenv",
+      },
+    });
+    expect(config.vaultIds).toBe("vault-from-cli");
+  });
+
+  it("comma-separated CLAUDE_VAULT_IDS round-trips intact (parsing is serve's responsibility)", () => {
+    // init-slack writes e.g. "vault-aaa,vault-bbb"; serve splits on commas.
+    // This test confirms the raw string is preserved by resolveConfig so serve
+    // can split it however it chooses — no data loss in config layer.
+    const raw = "vault-aaa,vault-bbb,vault-ccc";
+    const config = resolveConfig({
+      env: {},
+      dotEnv: { ...fullDotEnv(), CLAUDE_VAULT_IDS: raw },
+    });
+    expect(config.vaultIds).toBe(raw);
+    // Simulate what serve.ts does with the raw string (lines 48-50 of serve.ts)
+    const parsed = config.vaultIds!.split(",").map((id) => id.trim()).filter(Boolean);
+    expect(parsed).toEqual(["vault-aaa", "vault-bbb", "vault-ccc"]);
   });
 });
