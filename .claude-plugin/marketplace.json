@@ -1,0 +1,34 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "agentchannels",
+  "description": "Connect Claude Managed Agents to messaging channels — initialize Slack integrations and run the bridge directly from Claude Code",
+  "owner": {
+    "name": "AgentChannels"
+  },
+  "plugins": [
+    {
+      "name": "agentchannels",
+      "description": "Install and run agentchannels from Claude Code via /ach:init-slack and /ach:serve",
+      "version": "0.1.5",
+      "source": "./",
+      "category": "development",
+      "homepage": "https://github.com/agentchannels/agentchannels",
+      "repository": "https://github.com/agentchannels/agentchannels",
+      "license": "Apache-2.0",
+      "keywords": [
+        "claude",
+        "slack",
+        "agent",
+        "chatbot",
+        "managed-agents",
+        "anthropic",
+        "agentchannels"
+      ],
+      "tags": [
+        "slack",
+        "messaging",
+        "bridge"
+      ]
+    }
+  ]
+}

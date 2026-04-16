@@ -1,6 +1,7 @@
 import { input, confirm, select, password } from '@inquirer/prompts';
 import { writeEnvFile } from '../../config/env.js';
 import { resolvePartialConfig } from '../../core/config.js';
+import type { ConfigOverrides } from '../../core/config.js';
 import { buildSlackManifest } from './manifest.js';
 import { SlackApiClient, SlackApiRequestError } from './api.js';
 import { addRedirectUrl, runOAuthInstall } from './oauth.js';
@@ -25,6 +26,25 @@ export interface SlackInitOptions {
   skipEnvWrite?: boolean;
   /** Working directory for .env file */
   cwd?: string;
+  /**
+   * Run without interactive prompts.
+   * Path is inferred from which credentials are provided:
+   *   - Manual path: slackBotToken + slackAppToken + slackSigningSecret
+   *   - Auto path:   slackRefreshToken
+   */
+  nonInteractive?: boolean;
+  /** Slack Bot Token override (xoxb-...) — CLI flag or env var SLACK_BOT_TOKEN */
+  slackBotToken?: string;
+  /** Slack App-Level Token override (xapp-...) — CLI flag or env var SLACK_APP_TOKEN */
+  slackAppToken?: string;
+  /** Slack Signing Secret override — CLI flag or env var SLACK_SIGNING_SECRET */
+  slackSigningSecret?: string;
+  /** Slack Refresh Token for automatic setup (xoxe-...) — CLI flag or env var SLACK_REFRESH_TOKEN */
+  slackRefreshToken?: string;
+  /** App name for non-interactive automatic setup (default: "General Agent") */
+  appName?: string;
+  /** App description for non-interactive automatic setup */
+  appDescription?: string;
 }
 
 /**
@@ -43,6 +63,11 @@ export type SetupMethod = 'automatic' | 'guided' | 'manual';
  */
 export async function initSlack(options: SlackInitOptions = {}): Promise<SlackInitResult> {
   const cwd = options.cwd ?? process.cwd();
+
+  // Non-interactive mode: infer path from provided credentials, skip all prompts
+  if (options.nonInteractive) {
+    return initSlackNonInteractive({ ...options, cwd });
+  }
 
   console.log('\n🔧 Agent Channels — Slack Setup\n');
   console.log('This wizard will help you configure a Slack bot for use with Claude Managed Agents.\n');
@@ -218,6 +243,262 @@ export async function initSlack(options: SlackInitOptions = {}): Promise<SlackIn
     appToken,
     signingSecret,
     envWritten,
+  };
+}
+
+// ────────────────────────── Non-Interactive Setup ──────────────────────────
+
+/**
+ * Non-interactive Slack init.  Infers which path to take from the supplied
+ * credentials — no prompts are shown.
+ *
+ * Path selection (in priority order):
+ *  1. Auto path    — SLACK_REFRESH_TOKEN present → token rotation + app
+ *                    creation via Slack API (takes priority over manual tokens)
+ *  2. Manual path  — SLACK_BOT_TOKEN + SLACK_APP_TOKEN + SLACK_SIGNING_SECRET
+ *                    all present → validate and write directly to .env
+ *
+ * When both SLACK_REFRESH_TOKEN and the full set of manual tokens are provided,
+ * the auto path wins: a new Slack app is created via the API using the refresh
+ * token, and the manual tokens are ignored.
+ *
+ * Credentials are resolved with three-source precedence:
+ *   CLI flags (options.*) > process.env > .env file
+ *
+ * @throws {Error} if insufficient credentials are provided for either path
+ */
+export async function initSlackNonInteractive(
+  options: SlackInitOptions & { cwd: string },
+): Promise<SlackInitResult> {
+  const { cwd, skipEnvWrite } = options;
+
+  // Resolve three-source config for standard Slack tokens
+  const overrides: ConfigOverrides = {
+    slackBotToken: options.slackBotToken,
+    slackAppToken: options.slackAppToken,
+    slackSigningSecret: options.slackSigningSecret,
+  };
+  const config = resolvePartialConfig({ overrides, cwd });
+
+  const botToken = config.slackBotToken;
+  const appToken = config.slackAppToken;
+  const signingSecret = config.slackSigningSecret;
+
+  // SLACK_REFRESH_TOKEN is not in the standard config map — read directly
+  const refreshToken =
+    options.slackRefreshToken ??
+    process.env.SLACK_REFRESH_TOKEN ??
+    undefined;
+
+  // ── Auto path takes priority: explicit refresh token → create new app ────
+  // Checked first so that providing SLACK_REFRESH_TOKEN always triggers app
+  // creation via the Slack API, even if manual tokens are also set in env.
+  if (refreshToken) {
+    const appName = options.appName ?? 'General Agent';
+    const appDescription =
+      options.appDescription ?? 'AI agent for your team — powered by agentchannels';
+
+    console.log('\n🔧 Agent Channels — Slack Setup (non-interactive / automatic)\n');
+
+    const credentials = await automaticSetupNonInteractive(appName, appDescription, refreshToken);
+
+    let envWritten = false;
+    if (!skipEnvWrite) {
+      writeEnvFile(
+        {
+          SLACK_BOT_TOKEN: credentials.botToken,
+          SLACK_APP_TOKEN: credentials.appToken,
+          SLACK_SIGNING_SECRET: credentials.signingSecret,
+          SLACK_REFRESH_TOKEN: credentials.newRefreshToken,
+        },
+        cwd,
+      );
+      envWritten = true;
+      console.log('\n✅ Slack credentials saved to .env');
+    }
+
+    console.log('\n✅ Slack setup complete!');
+    console.log(`\n💡 Want a custom logo? Upload one at:`);
+    console.log(`   https://api.slack.com/apps/${credentials.appId}/general#edit`);
+    console.log('\n   Next step: run `ach init agent` to configure your Claude agent.\n');
+
+    return {
+      appName,
+      appDescription,
+      botToken: credentials.botToken,
+      appToken: credentials.appToken,
+      signingSecret: credentials.signingSecret,
+      envWritten,
+    };
+  }
+
+  // ── Manual path: all three tokens provided directly ───────────────────
+  if (botToken && appToken && signingSecret) {
+    return initSlackManual({ botToken, appToken, signingSecret, cwd, skipEnvWrite });
+  }
+
+  // ── Neither path has enough credentials ────────────────────────────────
+  throw new Error(
+    'Non-interactive mode requires credentials for one of these paths:\n' +
+      '  Manual path: SLACK_BOT_TOKEN + SLACK_APP_TOKEN + SLACK_SIGNING_SECRET\n' +
+      '  Auto path:   SLACK_REFRESH_TOKEN\n' +
+      'Set these as environment variables, CLI flags, or in a .env file.',
+  );
+}
+
+/**
+ * Execute the manual path: validate provided tokens and write them to .env.
+ * No prompts — all credentials must already be resolved.
+ */
+async function initSlackManual(options: {
+  botToken: string;
+  appToken: string;
+  signingSecret: string;
+  cwd: string;
+  skipEnvWrite?: boolean;
+}): Promise<SlackInitResult> {
+  const { botToken, appToken, signingSecret, cwd, skipEnvWrite } = options;
+
+  // Validate token formats
+  if (!botToken.startsWith('xoxb-')) {
+    throw new Error(
+      'SLACK_BOT_TOKEN must start with "xoxb-". Got: ' + botToken.slice(0, 10) + '...',
+    );
+  }
+  if (botToken.length < 20) {
+    throw new Error('SLACK_BOT_TOKEN appears too short (minimum 20 characters)');
+  }
+  if (!appToken.startsWith('xapp-')) {
+    throw new Error(
+      'SLACK_APP_TOKEN must start with "xapp-". Got: ' + appToken.slice(0, 10) + '...',
+    );
+  }
+  if (appToken.length < 20) {
+    throw new Error('SLACK_APP_TOKEN appears too short (minimum 20 characters)');
+  }
+  if (!signingSecret.trim()) {
+    throw new Error('SLACK_SIGNING_SECRET is required');
+  }
+  if (signingSecret.length < 10) {
+    throw new Error('SLACK_SIGNING_SECRET appears too short (minimum 10 characters)');
+  }
+
+  console.log('\n🔧 Agent Channels — Slack Setup (non-interactive / manual)\n');
+  console.log('All three credentials provided — writing directly to .env\n');
+
+  let envWritten = false;
+  if (!skipEnvWrite) {
+    writeEnvFile(
+      {
+        SLACK_BOT_TOKEN: botToken,
+        SLACK_APP_TOKEN: appToken,
+        SLACK_SIGNING_SECRET: signingSecret,
+      },
+      cwd,
+    );
+    envWritten = true;
+    console.log('✅ Slack credentials saved to .env');
+  }
+
+  console.log('\n✅ Slack setup complete!');
+  console.log('\n   Next step: run `ach init agent` to configure your Claude agent.\n');
+
+  return {
+    appName: '',
+    appDescription: '',
+    botToken,
+    appToken,
+    signingSecret,
+    envWritten,
+  };
+}
+
+// ────────────────────────── Non-Interactive Automatic Setup ──────────────────────────
+
+/**
+ * Non-interactive automatic setup: takes the refresh token as a parameter
+ * (no prompt), drives the full token-rotation → app-creation → OAuth-install
+ * → app-level-token flow without any user interaction.
+ *
+ * Blocks up to 5 minutes waiting for the browser-based OAuth callback
+ * (the timeout is enforced by `runOAuthInstall` in oauth.ts).
+ *
+ * Unlike the interactive `automaticSetup`, this function:
+ *  - Receives the refresh token directly (not via a password prompt)
+ *  - Does NOT retry on error — throws immediately so callers can handle it
+ *  - Generates the app-level token via the Slack API (`apps.token.create`)
+ *    instead of asking the user to create one manually in the Slack UI
+ *
+ * @throws {SlackApiRequestError} on any Slack API failure
+ * @throws {Error} if the OAuth callback times out (> 5 minutes)
+ */
+export async function automaticSetupNonInteractive(
+  appName: string,
+  appDescription: string,
+  refreshToken: string,
+): Promise<AutomaticSetupCredentials> {
+  console.log('\n🤖 Automatic Setup via Slack API\n');
+
+  // Step 0: Rotate the refresh token → short-lived access token
+  console.log('⏳ Rotating refresh token...');
+  const rotationResult = await SlackApiClient.rotateConfigToken(refreshToken);
+  console.log(
+    `   ✅ Token rotated${rotationResult.team?.name ? ` (workspace: ${rotationResult.team.name})` : ''}`,
+  );
+  console.log('   ⚠️  Your old refresh token is now invalidated.');
+  console.log(`   📝 New refresh token: ${rotationResult.refresh_token.slice(0, 20)}...`);
+
+  const client = new SlackApiClient({ accessToken: rotationResult.token });
+
+  // Step 1: Create app from manifest → signing secret
+  console.log('\n⏳ Creating Slack app from manifest...');
+  const manifest = buildSlackManifest({ appName, appDescription, socketMode: true });
+  const createResult = await client.createAppFromManifest(manifest);
+  const appId = createResult.app_id;
+  const signingSecret = createResult.credentials.signing_secret;
+  console.log(`   ✅ App created: ${appId}`);
+
+  // Step 2: Install app to workspace via OAuth (local server + browser open)
+  const scopes = [
+    'app_mentions:read', 'channels:history', 'channels:read', 'chat:write',
+    'groups:history', 'groups:read', 'im:history', 'im:read', 'im:write',
+    'mpim:history', 'mpim:read', 'users:read',
+  ];
+
+  console.log('⏳ Updating manifest with OAuth redirect URL...');
+  const port = 3333;
+  const redirectUri = `http://localhost:${port}/oauth/callback`;
+  await addRedirectUrl(rotationResult.token, appId, redirectUri);
+
+  console.log('⏳ Installing app to workspace via OAuth...');
+  console.log('   A browser window will open for authorization.');
+  console.log('   Waiting up to 5 minutes for browser callback...');
+
+  const installResult = await runOAuthInstall({
+    appId,
+    clientId: createResult.credentials.client_id,
+    clientSecret: createResult.credentials.client_secret,
+    scopes,
+    port,
+  });
+
+  const botToken = installResult.botToken;
+  console.log(`   ✅ App installed to workspace: ${installResult.teamName}`);
+
+  // Step 3: Generate app-level token via API (no manual step — uses apps.token.create)
+  console.log('\n⏳ Generating app-level token...');
+  const appTokenResult = await client.generateAppLevelToken(appId);
+  const appToken = appTokenResult.token;
+  console.log('   ✅ App-level token generated');
+
+  console.log(`\n🎉 Slack app "${appName}" created and configured successfully!\n`);
+
+  return {
+    appId,
+    botToken,
+    appToken,
+    signingSecret,
+    newRefreshToken: rotationResult.refresh_token,
   };
 }
 

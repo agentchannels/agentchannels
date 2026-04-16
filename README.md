@@ -1,4 +1,4 @@
-# agentchannels
+# Agent Channels
 
 Agent Channels (`ach`) is a CLI that bridges your communicatino channels, such as Slack, to agents like [Claude Managed Agents](https://platform.claude.com/docs/en/managed-agents/). Mention the bot in any channel or DM and each thread becomes a multi-turn streaming session with your agent — tools, vaults, and all.
 
@@ -35,6 +35,21 @@ That's it. Mention your bot in any Slack channel and start chatting.
 > **Don't have an agent yet?** Run `ach init agent` — the wizard will create a new Claude Managed Agent and Environment, then just run `ach serve`.
 
 ## Installation
+
+<details>
+<summary><strong>Claude Code plugin</strong></summary>
+
+Install directly into Claude Code — no git clone needed:
+
+```bash
+claude plugin marketplace add agentchannels/agentchannels
+claude plugin install agentchannels@agentchannels
+```
+
+Then use `/ach:init-slack` and `/ach:serve` inside Claude Code.
+
+To update: `claude plugin update agentchannels@agentchannels`
+</details>
 
 <details>
 <summary><strong>macOS (Homebrew)</strong></summary>

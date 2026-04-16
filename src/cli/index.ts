@@ -28,9 +28,24 @@ const initCmd = program
 initCmd
   .command("slack")
   .description("Set up Slack app and credentials")
-  .action(async () => {
+  .option("--non-interactive", "Run without prompts (infers path from provided credentials)")
+  .option("--slack-bot-token <token>", "Slack Bot Token (xoxb-...)")
+  .option("--slack-app-token <token>", "Slack App-Level Token (xapp-...)")
+  .option("--slack-signing-secret <secret>", "Slack Signing Secret")
+  .option("--slack-refresh-token <token>", "Slack Refresh Token for automatic setup (xoxe-...)")
+  .option("--app-name <name>", "Slack app name for non-interactive mode (default: General Agent)")
+  .option("--app-description <desc>", "Slack app description for non-interactive mode")
+  .action(async (opts) => {
     try {
-      await initSlack();
+      await initSlack({
+        nonInteractive: opts.nonInteractive,
+        slackBotToken: opts.slackBotToken,
+        slackAppToken: opts.slackAppToken,
+        slackSigningSecret: opts.slackSigningSecret,
+        slackRefreshToken: opts.slackRefreshToken,
+        appName: opts.appName,
+        appDescription: opts.appDescription,
+      });
     } catch (error) {
       if ((error as Error).name === "ExitPromptError") {
         console.log("\n👋 Setup cancelled.");
