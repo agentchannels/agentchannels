@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { Command } from "commander";
 import { registerServeCommand } from "../commands/serve.js";
 import { initSlack } from "../channels/slack/init.js";
+import { initDiscord } from "../channels/discord/init.js";
 import { initAgent } from "../commands/init-agent.js";
 import { deployRailway } from "../deploy/railway.js";
 
@@ -37,6 +38,22 @@ initCmd
         process.exit(0);
       }
       console.error("\n❌ Slack setup failed:", (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+initCmd
+  .command("discord")
+  .description("Set up Discord bot and credentials")
+  .action(async () => {
+    try {
+      await initDiscord();
+    } catch (error) {
+      if ((error as Error).name === "ExitPromptError") {
+        console.log("\n👋 Setup cancelled.");
+        process.exit(0);
+      }
+      console.error("\n❌ Discord setup failed:", (error as Error).message);
       process.exit(1);
     }
   });
