@@ -164,6 +164,35 @@ export class AgentClient {
   }
 
   /**
+   * Retrieve an existing vault to validate it exists.
+   * Returns the vault info or throws if not found/unauthorized.
+   */
+  async getVault(vaultId: string): Promise<{ id: string; name: string }> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vault = await (this.client.beta as any).vaults.retrieve(vaultId);
+    return {
+      id: vault.id,
+      name: vault.name,
+    };
+  }
+
+  /**
+   * List available vaults (up to `limit`, default 20) via `beta.vaults.list`.
+   * Returns an empty array if the API surface is unavailable or an error occurs.
+   *
+   * Callers should guard against an empty result (step skipped gracefully).
+   */
+  async listVaults(options?: { limit?: number }): Promise<Array<{ id: string; name: string }>> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = this.client.beta as any;
+    const response = await raw.vaults.list({ limit: options?.limit ?? 20 });
+    const data = response.data ?? response;
+    if (!Array.isArray(data)) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return data.map((v: any) => ({ id: v.id, name: v.name }));
+  }
+
+  /**
    * Create a new managed agent session.
    * Sessions reference both an agent and an environment.
    */
