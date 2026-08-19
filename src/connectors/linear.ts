@@ -3,6 +3,10 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type {
   Connector,
   ConnectorCredentials,
+  ConnectorModule,
+  OnboardingArtifact,
+  OnboardingContext,
+  VerifiedConnectorCredentials,
   VerificationResult,
 } from "./connector.js";
 import type {
@@ -20,12 +24,67 @@ export type LinearFetchLike = (
 export type LinearConnectorOptions = Readonly<{
   fetch?: LinearFetchLike;
   apiUrl?: string;
+  oauthTokenUrl?: string;
   replayWindowMilliseconds?: number;
 }>;
 
 type JsonObject = Readonly<Record<string, unknown>>;
 const DEFAULT_API_URL = "https://api.linear.app/graphql";
+const DEFAULT_OAUTH_TOKEN_URL = "https://api.linear.app/oauth/token";
 const DEFAULT_REPLAY_WINDOW_MS = 60_000;
+
+export type LinearAppManifest = Readonly<{
+  $schema: "https://linear.app/.well-known/oauth-app-manifest.schema.json";
+  schemaVersion: "1.0.0";
+  distribution: "private";
+  display: Readonly<{ description: string }>;
+  developer: Readonly<{ name: string }>;
+  oauth: Readonly<{
+    client_name: string;
+    client_uri: string;
+    redirect_uris: readonly string[];
+    grant_types: readonly ["authorization_code", "client_credentials"];
+  }>;
+  webhook: Readonly<{
+    enabled: true;
+    url: string;
+    resourceTypes: readonly ["AgentSessionEvent"];
+  }>;
+}>;
+
+export function createLinearOwnedManifest(options: {
+  agentName: string;
+  relayOrigin: string;
+  relayWebhookUrl: string;
+}): LinearAppManifest {
+  const agentName = options.agentName.trim();
+  if (agentName.length < 2)
+    throw new Error("Linear Agent name must contain at least two characters");
+  if (/linear/i.test(agentName))
+    throw new Error("Linear application names must not contain “Linear”");
+  const origin = new URL(options.relayOrigin).origin;
+  const webhook = new URL(options.relayWebhookUrl);
+  if (webhook.protocol !== "https:")
+    throw new Error("Linear webhook URL must use HTTPS");
+  return {
+    $schema: "https://linear.app/.well-known/oauth-app-manifest.schema.json",
+    schemaVersion: "1.0.0",
+    distribution: "private",
+    display: { description: `${agentName} local coding agent` },
+    developer: { name: "AgentChannels" },
+    oauth: {
+      client_name: agentName,
+      client_uri: "https://github.com/agentchannels/agentchannels",
+      redirect_uris: [new URL("/v1/oauth/linear/callback", origin).toString()],
+      grant_types: ["authorization_code", "client_credentials"],
+    },
+    webhook: {
+      enabled: true,
+      url: webhook.toString(),
+      resourceTypes: ["AgentSessionEvent"],
+    },
+  };
+}
 
 function header(
   headers: Readonly<Record<string, string>>,
@@ -158,17 +217,115 @@ function contentFor(message: DeliveryMessage): JsonObject {
   };
 }
 
-export class LinearConnector implements Connector {
+export class LinearConnector implements Connector, ConnectorModule {
   readonly type = "linear" as const;
+  readonly label = "Linear";
+  readonly credentialFields = [
+    { key: "clientId", label: "Linear Client ID" },
+    { key: "clientSecret", label: "Linear Client Secret" },
+    { key: "webhookSecret", label: "Linear Webhook Signing Secret" },
+  ] as const;
   private readonly fetcher: LinearFetchLike;
   private readonly apiUrl: string;
+  private readonly oauthTokenUrl: string;
   private readonly replayWindowMilliseconds: number;
 
   constructor(options: LinearConnectorOptions = {}) {
     this.fetcher = options.fetch ?? fetch;
     this.apiUrl = options.apiUrl ?? DEFAULT_API_URL;
+    this.oauthTokenUrl = options.oauthTokenUrl ?? DEFAULT_OAUTH_TOKEN_URL;
     this.replayWindowMilliseconds =
       options.replayWindowMilliseconds ?? DEFAULT_REPLAY_WINDOW_MS;
+  }
+
+  createOnboardingArtifact(context: OnboardingContext): OnboardingArtifact {
+    const manifest = createLinearOwnedManifest({
+      agentName: context.agentName,
+      relayOrigin: context.relayOrigin,
+      relayWebhookUrl: context.webhookUrl,
+    });
+    const content = `${JSON.stringify(manifest, null, 2)}\n`;
+    return {
+      filename: "linear-oauth-app-manifest.json",
+      content,
+      copyToClipboard: false,
+      actionUrl: `https://linear.app/settings/api/applications/new?manifest=${encodeURIComponent(JSON.stringify(manifest))}`,
+      instructions: [
+        "Create the prefilled private OAuth application as a Linear workspace administrator.",
+        "Keep Client credentials tokens enabled; the manifest requests authorization_code because Linear requires it and client_credentials for the app-actor token.",
+        "Enable the Agent session events webhook shown in the manifest.",
+        "Then copy the Client ID, Client Secret, and Webhook Signing Secret from the application settings.",
+      ],
+    };
+  }
+
+  async verifyCredentials(
+    credentials: Readonly<Record<string, string>>,
+  ): Promise<VerifiedConnectorCredentials> {
+    const clientId = credentials.clientId;
+    const clientSecret = credentials.clientSecret;
+    const webhookSecret = credentials.webhookSecret;
+    if (!webhookSecret)
+      throw new Error("Linear Webhook Signing Secret is required");
+    let apiToken = credentials.apiToken;
+    let expiresAt = credentials.expiresAt;
+    let oauthProvider = credentials.oauthProvider;
+    if (!apiToken) {
+      if (!clientId || !clientSecret)
+        throw new Error(
+          "Linear Client ID and Client Secret are required when no app-actor token is supplied",
+        );
+      const tokenResponse = await this.fetcher(this.oauthTokenUrl, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          scope: "read,write,app:mentionable,app:assignable",
+          client_id: clientId,
+          client_secret: clientSecret,
+        }),
+      });
+      const tokenResult = await parseResponse(tokenResponse);
+      apiToken = stringValue(tokenResult.access_token);
+      if (!tokenResponse.ok || !apiToken) {
+        throw new Error(
+          `Linear rejected the client credentials: ${stringValue(tokenResult.error_description) ?? stringValue(tokenResult.error) ?? `HTTP ${String(tokenResponse.status)}`}`,
+        );
+      }
+      const expiresIn =
+        typeof tokenResult.expires_in === "number"
+          ? tokenResult.expires_in
+          : 30 * 24 * 60 * 60;
+      expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+      oauthProvider = "linear-client-credentials";
+    }
+    const data = await this.graphql(
+      `query BindingIdentity {
+        viewer { id app organization { id name } }
+      }`,
+      {},
+      apiToken,
+    );
+    const viewer = objectValue(data.viewer);
+    const organization = objectValue(viewer?.organization);
+    const organizationId = stringValue(organization?.id);
+    if (viewer?.app !== true || !organizationId) {
+      throw new Error(
+        "Linear did not return an app actor and organization for these credentials",
+      );
+    }
+    return {
+      credentials: {
+        ...credentials,
+        apiToken,
+        accessToken: apiToken,
+        ...(oauthProvider === undefined ? {} : { oauthProvider }),
+        ...(expiresAt === undefined ? {} : { expiresAt }),
+      },
+      externalInstallationId: organizationId,
+      externalInstallationName:
+        stringValue(organization?.name) ?? organizationId,
+    };
   }
 
   verifyAndParse(
@@ -339,3 +496,5 @@ async function parseResponse(response: Response): Promise<JsonObject> {
 export const createLinearConnector = (
   options: LinearConnectorOptions = {},
 ): LinearConnector => new LinearConnector(options);
+
+export default new LinearConnector() satisfies ConnectorModule;

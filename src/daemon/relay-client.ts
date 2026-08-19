@@ -19,7 +19,7 @@ export type RelayWebhookResponse = {
 export type RelayClientOptions = {
   endpoints: RelayEndpoints;
   identity: InstallationIdentityService;
-  listBindings(): readonly Binding[];
+  listBindings(): readonly Pick<Binding, "id" | "connector">[];
   handleWebhook(request: RelayWebhook): Promise<RelayWebhookResponse>;
   onStateChange?(connected: boolean): void;
 };

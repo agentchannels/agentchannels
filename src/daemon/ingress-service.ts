@@ -26,7 +26,16 @@ export class IngressService {
       return { status: 200, body: "" };
     }
     const binding = this.options.store.getBinding(message.bindingId);
-    if (binding === undefined || binding.connector !== message.connector) {
+    if (binding === undefined) {
+      const setup = this.options.store.getBindingSetup(message.bindingId);
+      const connector =
+        setup?.connector === message.connector
+          ? this.options.connectors.get(setup.connector)
+          : undefined;
+      const response = connector?.handlePendingWebhook?.(message);
+      return response ?? { status: 404, body: "Unknown binding" };
+    }
+    if (binding.connector !== message.connector) {
       return { status: 404, body: "Unknown binding" };
     }
     const connector = this.options.connectors.get(binding.connector);

@@ -34,8 +34,20 @@ export type BindingSetup = {
   id: string;
   agentId: string;
   connector: ConnectorType;
+  step: BindingSetupStep;
+  artifactPath: string | null;
+  externalInstallationId: string | null;
+  externalInstallationName: string | null;
   createdAt: string;
+  updatedAt: string;
+  lastError: string | null;
 };
+
+export type BindingSetupStep =
+  | "selected"
+  | "admin_action"
+  | "credentials"
+  | "operator";
 
 export type FollowUp = {
   id: string;
@@ -163,6 +175,24 @@ function mapBinding(row: Record<string, unknown>): Binding {
     operatorUserId: row.operator_user_id as string,
     externalInstallationId: row.external_installation_id as string,
     createdAt: row.created_at as string,
+  };
+}
+function mapBindingSetup(row: Record<string, unknown>): BindingSetup {
+  return {
+    id: row.id as string,
+    agentId: row.agent_id as string,
+    connector: row.connector as ConnectorType,
+    step: (row.step as BindingSetupStep | undefined) ?? "selected",
+    artifactPath: (row.artifact_path as string | null) ?? null,
+    externalInstallationId:
+      (row.external_installation_id as string | null) ?? null,
+    externalInstallationName:
+      (row.external_installation_name as string | null) ?? null,
+    createdAt: row.created_at as string,
+    updatedAt:
+      (row.updated_at as string | null | undefined) ??
+      (row.created_at as string),
+    lastError: (row.last_error as string | null) ?? null,
   };
 }
 function mapSession(
@@ -333,6 +363,10 @@ export class Persistence {
       );
     });
   }
+  findAgentByExactCwd(cwd: string): Agent | undefined {
+    const target = resolve(cwd);
+    return this.listAgents().find((agent) => resolve(agent.cwd) === target);
+  }
   resolveAgentByCwd(cwd: string): Agent | undefined {
     const agents = this.findAgentsByCwd(cwd);
     if (agents.length > 1) throw new AmbiguousAgentError(cwd, agents);
@@ -442,17 +476,30 @@ export class Persistence {
     connector: ConnectorType;
     createdAt?: string;
   }): BindingSetup {
+    const createdAt = iso(input.createdAt);
     const setup: BindingSetup = {
       id: input.id ?? id("bd"),
       agentId: input.agentId,
       connector: input.connector,
-      createdAt: iso(input.createdAt),
+      step: "selected",
+      artifactPath: null,
+      externalInstallationId: null,
+      externalInstallationName: null,
+      createdAt,
+      updatedAt: createdAt,
+      lastError: null,
     };
     this.db
       .prepare(
-        "INSERT INTO binding_setups(id,agent_id,connector,created_at) VALUES (?,?,?,?)",
+        "INSERT INTO binding_setups(id,agent_id,connector,step,artifact_path,external_installation_id,external_installation_name,created_at,updated_at,last_error) VALUES (?,?,?,'selected',NULL,NULL,NULL,?,?,NULL)",
       )
-      .run(setup.id, setup.agentId, setup.connector, setup.createdAt);
+      .run(
+        setup.id,
+        setup.agentId,
+        setup.connector,
+        setup.createdAt,
+        setup.updatedAt,
+      );
     return setup;
   }
   getBindingSetup(setupId: string): BindingSetup | undefined {
@@ -460,12 +507,7 @@ export class Persistence {
       .prepare("SELECT * FROM binding_setups WHERE id=?")
       .get(setupId) as Record<string, unknown> | undefined;
     if (row === undefined) return undefined;
-    return {
-      id: row.id as string,
-      agentId: row.agent_id as string,
-      connector: row.connector as ConnectorType,
-      createdAt: row.created_at as string,
-    };
+    return mapBindingSetup(row);
   }
   listBindingSetups(agentId: string): BindingSetup[] {
     return (
@@ -474,24 +516,65 @@ export class Persistence {
           "SELECT * FROM binding_setups WHERE agent_id=? ORDER BY created_at,id",
         )
         .all(agentId) as Record<string, unknown>[]
-    ).map((row) => ({
-      id: row.id as string,
-      agentId: row.agent_id as string,
-      connector: row.connector as ConnectorType,
-      createdAt: row.created_at as string,
-    }));
+    ).map(mapBindingSetup);
   }
   listAllBindingSetups(): BindingSetup[] {
     return (
       this.db
         .prepare("SELECT * FROM binding_setups ORDER BY created_at,id")
         .all() as Record<string, unknown>[]
-    ).map((row) => ({
-      id: row.id as string,
-      agentId: row.agent_id as string,
-      connector: row.connector as ConnectorType,
-      createdAt: row.created_at as string,
-    }));
+    ).map(mapBindingSetup);
+  }
+  updateBindingSetup(
+    setupId: string,
+    input: {
+      step?: BindingSetupStep;
+      artifactPath?: string | null;
+      externalInstallationId?: string | null;
+      externalInstallationName?: string | null;
+      lastError?: string | null;
+      updatedAt?: Date | string;
+    },
+  ): BindingSetup {
+    const current = required(
+      this.getBindingSetup(setupId),
+      `Binding setup ${setupId} not found`,
+    );
+    const next = {
+      step: input.step ?? current.step,
+      artifactPath:
+        input.artifactPath === undefined
+          ? current.artifactPath
+          : input.artifactPath,
+      externalInstallationId:
+        input.externalInstallationId === undefined
+          ? current.externalInstallationId
+          : input.externalInstallationId,
+      externalInstallationName:
+        input.externalInstallationName === undefined
+          ? current.externalInstallationName
+          : input.externalInstallationName,
+      lastError:
+        input.lastError === undefined ? current.lastError : input.lastError,
+      updatedAt: iso(input.updatedAt),
+    };
+    this.db
+      .prepare(
+        "UPDATE binding_setups SET step=?,artifact_path=?,external_installation_id=?,external_installation_name=?,updated_at=?,last_error=? WHERE id=?",
+      )
+      .run(
+        next.step,
+        next.artifactPath,
+        next.externalInstallationId,
+        next.externalInstallationName,
+        next.updatedAt,
+        next.lastError,
+        setupId,
+      );
+    return required(
+      this.getBindingSetup(setupId),
+      `Binding setup ${setupId} disappeared after update`,
+    );
   }
   completeBindingSetup(
     setupId: string,

@@ -20,7 +20,7 @@
     "build": "tsup",
     "format": "biome format --write .",
     "lint": "biome lint .",
-    "start": "node dist/cli.js",
+    "start": "node scripts/start.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
