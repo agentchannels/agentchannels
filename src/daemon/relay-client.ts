@@ -123,7 +123,17 @@ export class RelayClient {
     socket: WebSocket,
     raw: string,
   ): Promise<boolean> {
-    const message = relayToLocalMessageSchema.parse(JSON.parse(raw));
+    let wireMessage: unknown;
+    try {
+      wireMessage = JSON.parse(raw);
+    } catch {
+      throw new Error("Relay invalid_message: incompatible protocol message");
+    }
+    const parsed = relayToLocalMessageSchema.safeParse(wireMessage);
+    if (!parsed.success) {
+      throw new Error("Relay invalid_message: incompatible protocol message");
+    }
+    const message = parsed.data;
     switch (message.type) {
       case "challenge": {
         const identity = await this.options.identity.getOrCreate();
