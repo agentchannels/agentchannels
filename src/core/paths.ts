@@ -5,6 +5,7 @@ import { mkdirSync } from "node:fs";
 export type ProductPaths = {
   root: string;
   database: string;
+  backups: string;
   logs: string;
   worktrees: string;
 };
@@ -18,6 +19,7 @@ export function resolveProductPaths(
   return {
     root,
     database: join(root, "agentchannels.db"),
+    backups: join(root, "backups"),
     logs: join(root, "logs"),
     worktrees: join(root, "worktrees"),
   };
@@ -26,5 +28,6 @@ export function resolveProductPaths(
 export function ensureProductPaths(paths: ProductPaths): void {
   mkdirSync(paths.root, { recursive: true, mode: 0o700 });
   mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
+  mkdirSync(paths.backups, { recursive: true, mode: 0o700 });
   mkdirSync(paths.worktrees, { recursive: true, mode: 0o700 });
 }

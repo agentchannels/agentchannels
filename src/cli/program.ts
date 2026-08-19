@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { promisify } from "node:util";
+import { Writable } from "node:stream";
 
 import { Command, Option } from "commander";
 
@@ -20,9 +21,17 @@ import { Persistence } from "../persistence/store.js";
 import { KeyringCredentialStore } from "../security/credentials.js";
 import {
   BindingCredentialService,
+  InstallationIdentityService,
   issueLinearClientCredentials,
 } from "../security/identity.js";
 import { startDaemon } from "../daemon/daemon.js";
+import { RelayManager } from "../relay/manager.js";
+import {
+  HOSTED_RELAY_ORIGIN,
+  parseRelayOrigin,
+  type RelayEndpoints,
+} from "../relay/origin.js";
+import { PRODUCT_VERSION } from "../version.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -35,15 +44,19 @@ function output(program: Command, value: unknown, human: string): void {
   );
 }
 
-function openStore(program: Command): Persistence {
+function productPaths(program: Command) {
   const global = program.opts<GlobalOptions>();
-  const paths = resolveProductPaths(
+  return resolveProductPaths(
     global.home === undefined
       ? process.env
       : { ...process.env, AGENTCHANNELS_HOME: global.home },
   );
+}
+
+function openStore(program: Command): Persistence {
+  const paths = productPaths(program);
   ensureProductPaths(paths);
-  return new Persistence(paths.database);
+  return new Persistence(paths.database, { backupDirectory: paths.backups });
 }
 
 async function prompt(label: string): Promise<string> {
@@ -64,6 +77,33 @@ async function readStandardInput(): Promise<string> {
   for await (const chunk of process.stdin as AsyncIterable<string>)
     value += chunk;
   return value;
+}
+
+async function hiddenPrompt(label: string): Promise<string> {
+  process.stdout.write(`${label}\n> `);
+  const muted = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  const terminal = createInterface({
+    input: process.stdin,
+    output: muted,
+    terminal: true,
+  });
+  try {
+    return (await terminal.question("")).trim();
+  } finally {
+    terminal.close();
+    process.stdout.write("\n");
+  }
+}
+
+function relayManager(store: Persistence): RelayManager {
+  return new RelayManager({
+    store,
+    identity: new InstallationIdentityService(new KeyringCredentialStore()),
+  });
 }
 
 async function resolveAgent(
@@ -249,7 +289,7 @@ function setupBinding(
   store: Persistence,
   agent: Agent,
   connector: ConnectorType,
-  publicRelayUrl: string,
+  relay: RelayEndpoints,
   linearClientUrl: string,
   linearRedirectUrl: string,
 ): unknown {
@@ -258,7 +298,7 @@ function setupBinding(
       .listBindingSetups(agent.id)
       .find((candidate) => candidate.connector === connector) ??
     store.createBindingSetup({ agentId: agent.id, connector });
-  const webhook = `${publicRelayUrl.replace(/\/$/, "")}/v1/webhooks/${connector}/${setup.id}`;
+  const webhook = relay.webhookUrl(connector, setup.id).toString();
   const onboarding =
     connector === "slack"
       ? createSlackOnboarding({
@@ -283,7 +323,7 @@ export function createProgram(): Command {
   const program = new Command()
     .name("agentchannels")
     .description("Use a local Claude Code environment from Slack and Linear")
-    .version("1.0.0")
+    .version(PRODUCT_VERSION)
     .option("--json", "emit machine-readable JSON")
     .option("--home <path>", "override ~/.agentchannels for this invocation");
   const interactive = (): boolean =>
@@ -296,7 +336,6 @@ export function createProgram(): Command {
     .option("--cwd <path>")
     .option("--additional-directory <path...>")
     .option("--connect <connectors>", "comma-separated slack,linear")
-    .option("--relay-public-url <url>")
     .option(
       "--linear-client-url <url>",
       "public client URL for Linear's app manifest",
@@ -311,7 +350,6 @@ export function createProgram(): Command {
         cwd?: string;
         additionalDirectory?: string[];
         connect?: string;
-        relayPublicUrl?: string;
         linearClientUrl?: string;
         linearRedirectUrl?: string;
       }) => {
@@ -331,11 +369,6 @@ export function createProgram(): Command {
                 )
               : []
             : parseConnectors(options.connect);
-        if (requested.length > 0 && options.relayPublicUrl === undefined) {
-          throw new Error(
-            "--relay-public-url is required when creating connector manifests",
-          );
-        }
         if (
           requested.includes("linear") &&
           (options.linearClientUrl === undefined ||
@@ -347,6 +380,10 @@ export function createProgram(): Command {
         }
         const store = openStore(program);
         try {
+          const relay =
+            requested.length === 0
+              ? undefined
+              : await relayManager(store).ensureHosted();
           const { agent, setups } = store.transaction(() => {
             const agent = store.createAgent({
               name,
@@ -356,16 +393,15 @@ export function createProgram(): Command {
               ),
             });
             const setups = requested.map((connector) => {
-              const relayPublicUrl = options.relayPublicUrl;
-              if (relayPublicUrl === undefined)
-                throw new Error("Relay public URL is missing");
+              if (relay === undefined)
+                throw new Error("Relay is not configured");
               return setupBinding(
                 store,
                 agent,
                 connector,
-                relayPublicUrl,
-                options.linearClientUrl ?? relayPublicUrl,
-                options.linearRedirectUrl ?? relayPublicUrl,
+                relay,
+                options.linearClientUrl ?? relay.origin,
+                options.linearRedirectUrl ?? relay.origin,
               );
             });
             return { agent, setups };
@@ -386,7 +422,6 @@ export function createProgram(): Command {
     .description("Prepare a Slack or Linear application manifest")
     .argument("<connector>")
     .option("--agent <id>")
-    .requiredOption("--relay-public-url <url>")
     .option("--linear-client-url <url>")
     .option("--linear-redirect-url <url>")
     .action(
@@ -394,7 +429,6 @@ export function createProgram(): Command {
         connectorValue: string,
         options: {
           agent?: string;
-          relayPublicUrl: string;
           linearClientUrl?: string;
           linearRedirectUrl?: string;
         },
@@ -412,19 +446,143 @@ export function createProgram(): Command {
         }
         const store = openStore(program);
         try {
+          const relay = await relayManager(store).ensureHosted();
           const agent = await resolveAgent(store, options.agent, interactive());
           const setup = setupBinding(
             store,
             agent,
             connector,
-            options.relayPublicUrl,
-            options.linearClientUrl ?? options.relayPublicUrl,
-            options.linearRedirectUrl ?? options.relayPublicUrl,
+            relay,
+            options.linearClientUrl ?? relay.origin,
+            options.linearRedirectUrl ?? relay.origin,
           );
           output(
             program,
             setup,
             `Prepared ${connector} setup. Workspace administrator approval is required.`,
+          );
+        } finally {
+          store.close();
+        }
+      },
+    );
+
+  const relay = program
+    .command("relay")
+    .description("Select or inspect the installation Relay");
+  relay.command("status").action(() => {
+    const paths = productPaths(program);
+    if (!existsSync(paths.database)) {
+      output(program, { status: "uninitialized" }, "Relay: uninitialized");
+      return;
+    }
+    const store = new Persistence(paths.database, {
+      backupDirectory: paths.backups,
+    });
+    try {
+      const status = relayManager(store).status();
+      output(
+        program,
+        status,
+        status.status === "uninitialized"
+          ? "Relay: uninitialized"
+          : `Relay: ${status.relayOrigin}`,
+      );
+    } finally {
+      store.close();
+    }
+  });
+  relay
+    .command("use")
+    .addOption(new Option("--hosted").conflicts("url"))
+    .addOption(new Option("--url <origin>").conflicts("hosted"))
+    .addOption(new Option("--enrollment-token-stdin").conflicts("hosted"))
+    .option("--acknowledge-binding-reconfiguration")
+    .action(
+      async (options: {
+        hosted?: boolean;
+        url?: string;
+        enrollmentTokenStdin?: boolean;
+        acknowledgeBindingReconfiguration?: boolean;
+      }) => {
+        const machine = !interactive();
+        let origin =
+          options.hosted === true ? HOSTED_RELAY_ORIGIN : options.url;
+        if (origin === undefined) {
+          if (machine) {
+            throw new Error(
+              "relay use requires --hosted or --url in non-interactive mode",
+            );
+          }
+          const selected = await prompt(
+            `Relay URL (blank for ${HOSTED_RELAY_ORIGIN}):`,
+          );
+          origin = selected === "" ? HOSTED_RELAY_ORIGIN : selected;
+        }
+        const normalized = parseRelayOrigin(origin).origin;
+        const store = openStore(program);
+        try {
+          const manager = relayManager(store);
+          const requirement = manager.preview(normalized);
+          let acknowledged = options.acknowledgeBindingReconfiguration === true;
+          if (requirement !== undefined && !acknowledged) {
+            if (machine) {
+              output(
+                program,
+                requirement,
+                JSON.stringify(requirement, null, 2),
+              );
+              return;
+            }
+            process.stdout.write(
+              `${requirement.bindings
+                .map(
+                  (binding) =>
+                    `${binding.connector} ${binding.bindingId}: ${binding.webhookUrl}`,
+                )
+                .join("\n")}\n`,
+            );
+            acknowledged = /^(y|yes)$/i.test(
+              await prompt("Update these provider webhook URLs? (yes/no)"),
+            );
+            if (!acknowledged) {
+              process.stdout.write("Relay unchanged.\n");
+              return;
+            }
+          }
+
+          let enrollmentToken: string | undefined;
+          if (normalized !== HOSTED_RELAY_ORIGIN) {
+            if (options.enrollmentTokenStdin === true) {
+              enrollmentToken = (await readStandardInput()).trim();
+            } else if (machine) {
+              throw new Error(
+                "Self-hosted relay use requires --enrollment-token-stdin in non-interactive mode",
+              );
+            } else {
+              const entered = await hiddenPrompt(
+                "Enrollment token (blank only for explicit open enrollment):",
+              );
+              enrollmentToken = entered === "" ? undefined : entered;
+            }
+          }
+          const result = await manager.use({
+            origin: normalized,
+            ...(enrollmentToken === undefined ? {} : { enrollmentToken }),
+            ...(acknowledged
+              ? { acknowledgeBindingReconfiguration: true }
+              : {}),
+          });
+          output(
+            program,
+            result,
+            `Relay: ${normalized}\nRestart the daemon.${
+              result.bindings.length === 0
+                ? ""
+                : `\n${result.bindings
+                    .map((binding) => binding.webhookUrl)
+                    .join("\n")}`
+            }`,
           );
         } finally {
           store.close();
@@ -803,11 +961,9 @@ export function createProgram(): Command {
   program
     .command("daemon")
     .description("Run the local AgentChannels daemon")
-    .requiredOption("--relay-url <ws-url>")
     .option("--concurrency <count>", "maximum simultaneous runtime turns", "2")
-    .action(async (options: { relayUrl: string; concurrency: string }) => {
+    .action(async (options: { concurrency: string }) => {
       await startDaemon({
-        relayUrl: options.relayUrl,
         concurrency: Number.parseInt(options.concurrency, 10),
         ...(program.opts<GlobalOptions>().home === undefined
           ? {}
