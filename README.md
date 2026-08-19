@@ -21,8 +21,7 @@ Connector credentials and the installation private key are stored in the operati
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm build
-pnpm link --global
+pnpm start -- init
 ```
 
 ## Quick start
@@ -34,14 +33,16 @@ cd /path/to/repository
 agentchannels init
 ```
 
-Prepare a Slack Binding and app manifest. A fresh installation enrolls with the
-hosted Relay automatically:
+`init` detects the Git repository and Claude Code runtime, proposes the
+repository name, lets you select Slack and/or Linear, writes the provider
+manifest to `~/.agentchannels/onboarding`, opens the administrator page when a
+browser is available, verifies hidden credential input, discovers the
+workspace and Operator, activates the Binding, and offers to install the
+per-user background daemon. Rerun the same command after cancellation or a
+provider error to resume the saved step.
 
-```sh
-agentchannels --json connect slack --agent ag_...
-```
-
-For Linear, use `connect linear` and also provide `--linear-client-url` and `--linear-redirect-url`.
+Fresh installations use `https://relay.agentchannels.io` without asking a
+Relay question. A local-only init does not enroll or create Relay state.
 
 To use a self-hosted Relay for the whole installation, select it before creating
 Bindings. The token is read from standard input and is not stored:
@@ -52,7 +53,7 @@ agentchannels relay use \
   --enrollment-token-stdin < /secure/path/relay-enrollment-token
 ```
 
-After installing the provider application, place its credentials in an operator-only file and pass them over standard input:
+Low-level automation can still complete a prepared setup explicitly:
 
 ```sh
 agentchannels binding complete \
@@ -62,7 +63,9 @@ agentchannels binding complete \
   --credentials-stdin < /secure/path/connector-credentials.json
 ```
 
-Slack credentials contain `signingSecret` and `botToken`. Linear credentials contain `webhookSecret` plus either an app-actor `apiToken` or `clientId` and `clientSecret`.
+Slack credentials contain `signingSecret` and `botToken`. Linear credentials
+contain `clientId`, `clientSecret`, and `webhookSecret`; AgentChannels obtains
+and verifies the app-actor token using Linear's client-credentials grant.
 
 Run the local daemon:
 
@@ -74,13 +77,15 @@ agentchannels daemon
 
 - `agentchannels init` creates an Agent for a local Git repository.
 - `agentchannels connect <slack|linear>` prepares provider onboarding.
+- `agentchannels agent|binding|sessions list` provides global discovery.
 - `agentchannels relay use|status` selects or inspects the installation Relay.
 - `agentchannels binding complete` stores credentials and activates a Binding.
 - `agentchannels access add|list|remove` manages per-Binding access.
 - `agentchannels users search <query>` finds stable provider user IDs.
-- `agentchannels status` shows Agent, Binding, setup, and Session state.
+- `agentchannels status` shows global Agent, Binding, setup, and Session state.
 - `agentchannels sessions retire` safely retires a retained Session.
-- `agentchannels daemon` runs the local relay connection and workers.
+- `agentchannels daemon` runs in the foreground; `daemon install|start|stop|status|uninstall`
+  manages a macOS LaunchAgent or Linux systemd user service.
 
 Add `--json` to supported commands for machine-readable output. Use `--agent ag_...` when the current directory does not identify one Agent.
 
