@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import type Database from "better-sqlite3";
 import { PRODUCT_VERSION } from "../version.js";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export type MigrationOptions = {
   filename: string;
@@ -230,9 +230,26 @@ function migrateToV2(db: Database.Database): void {
   ).run(new Date().toISOString());
 }
 
+function migrateToV3(db: Database.Database): void {
+  db.exec(`
+    ALTER TABLE binding_setups ADD COLUMN step TEXT NOT NULL DEFAULT 'selected'
+      CHECK (step IN ('selected','admin_action','credentials','operator'));
+    ALTER TABLE binding_setups ADD COLUMN artifact_path TEXT;
+    ALTER TABLE binding_setups ADD COLUMN external_installation_id TEXT;
+    ALTER TABLE binding_setups ADD COLUMN external_installation_name TEXT;
+    ALTER TABLE binding_setups ADD COLUMN updated_at TEXT;
+    ALTER TABLE binding_setups ADD COLUMN last_error TEXT;
+    UPDATE binding_setups SET updated_at=created_at WHERE updated_at IS NULL;
+  `);
+  db.prepare(
+    "INSERT INTO schema_migrations(version, applied_at) VALUES (3, ?)",
+  ).run(new Date().toISOString());
+}
+
 const migrations: Readonly<Record<number, (db: Database.Database) => void>> = {
   1: migrateToV1,
   2: migrateToV2,
+  3: migrateToV3,
 };
 
 export function migrate(

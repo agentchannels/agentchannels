@@ -96,6 +96,8 @@ jobs:
           test "$(pnpm --dir .release/smoke exec agentchannels --version)" = \
             "${{ steps.release.outputs.version }}"
           pnpm --dir .release/smoke exec agentchannels --help
+          pnpm exec node scripts/first-run-smoke.mjs \
+            "$PWD/.release/smoke/node_modules/.bin/agentchannels"
 
       - name: Refuse an existing npm version
         run: |

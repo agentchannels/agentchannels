@@ -34,6 +34,12 @@ describe("local database rollback", () => {
         'in_keep', 'public-key', 'https://old.example.com',
         '2026-01-01T00:00:00.000Z', NULL
       );
+      CREATE TABLE binding_setups (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        connector TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
     `);
     legacy.close();
 

@@ -27,10 +27,16 @@ function fixture(): { root: string; database: string; backups: string } {
 function downgradeToV1(database: string): void {
   const db = new Database(database);
   db.exec(`
+    ALTER TABLE binding_setups DROP COLUMN last_error;
+    ALTER TABLE binding_setups DROP COLUMN updated_at;
+    ALTER TABLE binding_setups DROP COLUMN external_installation_name;
+    ALTER TABLE binding_setups DROP COLUMN external_installation_id;
+    ALTER TABLE binding_setups DROP COLUMN artifact_path;
+    ALTER TABLE binding_setups DROP COLUMN step;
     ALTER TABLE installations DROP COLUMN enrolled_at;
     ALTER TABLE installations RENAME COLUMN relay_origin TO relay_url;
     ALTER TABLE installations RENAME COLUMN last_connected_at TO last_seen_at;
-    DELETE FROM schema_migrations WHERE version = 2;
+    DELETE FROM schema_migrations WHERE version >= 2;
   `);
   db.close();
 }

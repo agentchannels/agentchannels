@@ -1,7 +1,6 @@
-import { LinearConnector } from "../connectors/linear.js";
-import { SlackConnector } from "../connectors/slack.js";
-import type { Connector } from "../connectors/connector.js";
-import type { ConnectorType } from "../core/types.js";
+import { existsSync } from "node:fs";
+
+import { loadConnectorModules } from "../connectors/connector.js";
 import { DeliveryWorker } from "../core/delivery-worker.js";
 import { ensureProductPaths, resolveProductPaths } from "../core/paths.js";
 import { SessionCoordinator } from "../core/session-coordinator.js";
@@ -28,6 +27,8 @@ export async function startDaemon(options: DaemonOptions): Promise<void> {
       ? process.env
       : { ...process.env, AGENTCHANNELS_HOME: options.home };
   const paths = resolveProductPaths(environment);
+  if (!existsSync(paths.database))
+    throw new Error("AgentChannels is not initialized; run agentchannels init");
   ensureProductPaths(paths);
   const store = new Persistence(paths.database, {
     backupDirectory: paths.backups,
@@ -35,16 +36,20 @@ export async function startDaemon(options: DaemonOptions): Promise<void> {
   const keyring = new KeyringCredentialStore();
   const identityService = new InstallationIdentityService(keyring);
   const relayManager = new RelayManager({ store, identity: identityService });
-  const relayEndpoints = await relayManager.ensureHosted();
+  const relayEndpoints = relayManager.endpoints();
+  if (relayEndpoints === undefined) {
+    store.close();
+    throw new Error("Relay is not configured; run agentchannels init");
+  }
+  if (store.listAllBindings().length === 0) {
+    store.close();
+    throw new Error(
+      "No usable Bindings are configured; finish agentchannels init",
+    );
+  }
   const installation = await identityService.getOrCreate();
   const bindingCredentials = new BindingCredentialService(keyring);
-  const connectorList: Connector[] = [
-    new LinearConnector(),
-    new SlackConnector(),
-  ];
-  const connectors = new Map<ConnectorType, Connector>(
-    connectorList.map((connector) => [connector.type, connector]),
-  );
+  const connectors = await loadConnectorModules();
   const sessions = new SessionCoordinator({
     store,
     runtime: new ClaudeRuntime(),
@@ -71,7 +76,10 @@ export async function startDaemon(options: DaemonOptions): Promise<void> {
   const relay = new RelayClient({
     endpoints: relayEndpoints,
     identity: identityService,
-    listBindings: () => store.listAllBindings(),
+    listBindings: () => [
+      ...store.listAllBindings(),
+      ...store.listAllBindingSetups(),
+    ],
     handleWebhook: (request) => ingress.handle(request),
     onStateChange: (connected) => {
       if (connected) store.touchInstallation(installation.installationId);

@@ -9,6 +9,7 @@ import type {
   ConnectorCredentials,
   VerificationResult,
 } from "../src/connectors/connector.js";
+import { SlackConnector } from "../src/connectors/slack.js";
 import { SessionCoordinator } from "../src/core/session-coordinator.js";
 import type { InboundRequest, RemoteUser } from "../src/core/types.js";
 import { IngressService } from "../src/daemon/ingress-service.js";
@@ -140,6 +141,48 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 }
 
 describe("local ingress verification", () => {
+  it("answers Slack URL verification for a durable pending setup before credentials or Binding activation", async () => {
+    const store = new Persistence(":memory:");
+    const agent = store.createAgent({
+      id: "ag_pending_slack",
+      name: "Runbear",
+      cwd: "/tmp/runbear",
+    });
+    const setup = store.createBindingSetup({
+      id: "bd_pending_slack",
+      agentId: agent.id,
+      connector: "slack",
+    });
+    const credentials = new BindingCredentialService(
+      new MemoryCredentialStore(),
+    );
+    const ingress = new IngressService({
+      store,
+      credentials,
+      connectors: new Map([["slack", new SlackConnector()]]),
+      sessions: {} as SessionCoordinator,
+    });
+    const response = await ingress.handle(
+      webhook(
+        "slack-verification",
+        new Date().toISOString(),
+        "",
+        JSON.stringify({
+          type: "url_verification",
+          challenge: "provider-random-challenge",
+        }),
+        setup.id,
+      ),
+    );
+    expect(response).toEqual({
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge: "provider-random-challenge" }),
+    });
+    expect(store.getBinding(setup.id)).toBeUndefined();
+    store.close();
+  });
+
   it("blocks forged, stale, unauthorized, and replayed ingress before runtime execution", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agentchannels-ingress-"));
     const repositoryPath = join(directory, "repository");

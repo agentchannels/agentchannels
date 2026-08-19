@@ -3,6 +3,12 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type {
   Connector,
   ConnectorCredentials,
+  ConnectorModule,
+  OnboardingArtifact,
+  OnboardingContext,
+  PendingWebhook,
+  PendingWebhookResponse,
+  VerifiedConnectorCredentials,
   VerificationResult,
 } from "./connector.js";
 import type {
@@ -27,6 +33,73 @@ type JsonObject = Readonly<Record<string, unknown>>;
 
 const DEFAULT_API_URL = "https://slack.com/api";
 const DEFAULT_REPLAY_WINDOW_SECONDS = 300;
+
+export type SlackAppManifest = Readonly<{
+  display_information: Readonly<{ name: string }>;
+  features: Readonly<{
+    bot_user: Readonly<{ display_name: string; always_online: boolean }>;
+  }>;
+  oauth_config: Readonly<{ scopes: Readonly<{ bot: readonly string[] }> }>;
+  settings: Readonly<{
+    event_subscriptions: Readonly<{
+      request_url: string;
+      bot_events: readonly string[];
+    }>;
+    interactivity: Readonly<{ is_enabled: boolean; request_url: string }>;
+    org_deploy_enabled: boolean;
+    socket_mode_enabled: boolean;
+    token_rotation_enabled: boolean;
+  }>;
+}>;
+
+export function createSlackAppManifest(options: {
+  agentName: string;
+  relayWebhookUrl: string;
+}): SlackAppManifest {
+  const agentName = options.agentName.trim();
+  if (agentName.length < 2)
+    throw new Error("Slack Agent name must contain at least two characters");
+  const webhook = new URL(options.relayWebhookUrl);
+  if (webhook.protocol !== "https:")
+    throw new Error("Slack webhook URL must use HTTPS");
+  const requestUrl = webhook.toString();
+  return {
+    display_information: { name: agentName },
+    features: {
+      bot_user: { display_name: agentName, always_online: false },
+    },
+    oauth_config: {
+      scopes: {
+        bot: [
+          "app_mentions:read",
+          "chat:write",
+          "users:read",
+          "users:read.email",
+          "channels:history",
+          "groups:history",
+          "im:history",
+          "mpim:history",
+        ],
+      },
+    },
+    settings: {
+      event_subscriptions: {
+        request_url: requestUrl,
+        bot_events: [
+          "app_mention",
+          "message.channels",
+          "message.groups",
+          "message.im",
+          "message.mpim",
+        ],
+      },
+      interactivity: { is_enabled: true, request_url: requestUrl },
+      org_deploy_enabled: false,
+      socket_mode_enabled: false,
+      token_rotation_enabled: false,
+    },
+  };
+}
 
 function header(
   headers: Readonly<Record<string, string>>,
@@ -194,8 +267,13 @@ function parseFormBody(rawBody: Buffer): JsonObject | undefined {
   }
 }
 
-export class SlackConnector implements Connector {
+export class SlackConnector implements Connector, ConnectorModule {
   readonly type = "slack" as const;
+  readonly label = "Slack";
+  readonly credentialFields = [
+    { key: "botToken", label: "Slack Bot User OAuth Token" },
+    { key: "signingSecret", label: "Slack Signing Secret" },
+  ] as const;
   private readonly fetcher: FetchLike;
   private readonly apiBaseUrl: string;
   private readonly replayWindowSeconds: number;
@@ -208,6 +286,68 @@ export class SlackConnector implements Connector {
     );
     this.replayWindowSeconds =
       options.replayWindowSeconds ?? DEFAULT_REPLAY_WINDOW_SECONDS;
+  }
+
+  createOnboardingArtifact(context: OnboardingContext): OnboardingArtifact {
+    const manifest = createSlackAppManifest({
+      agentName: context.agentName,
+      relayWebhookUrl: context.webhookUrl,
+    });
+    const content = `${JSON.stringify(manifest, null, 2)}\n`;
+    return {
+      filename: "slack-app-manifest.json",
+      content,
+      copyToClipboard: true,
+      actionUrl: `https://api.slack.com/apps?new_app=1&manifest_json=${encodeURIComponent(JSON.stringify(manifest))}`,
+      instructions: [
+        "Choose the Slack workspace, review the manifest, and create the app.",
+        "Install the app to the workspace and approve the requested bot scopes.",
+        "Keep this command running while Slack verifies the HTTP Events request URL.",
+        "Then open OAuth & Permissions for the Bot User OAuth Token and Basic Information for the Signing Secret.",
+      ],
+    };
+  }
+
+  async verifyCredentials(
+    credentials: Readonly<Record<string, string>>,
+  ): Promise<VerifiedConnectorCredentials> {
+    const token = credentials.botToken;
+    const signingSecret = credentials.signingSecret;
+    if (!token || !signingSecret)
+      throw new Error("Slack Bot Token and Signing Secret are required");
+    const response = await this.fetcher(`${this.apiBaseUrl}/auth.test`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const result = await parseResponse(response);
+    const workspaceId = stringValue(result.team_id);
+    const botUserId = stringValue(result.user_id);
+    if (!response.ok || result.ok !== true || !workspaceId || !botUserId) {
+      throw new Error(
+        `Slack rejected the Bot Token: ${stringValue(result.error) ?? `HTTP ${String(response.status)}`}`,
+      );
+    }
+    return {
+      credentials: { ...credentials, botUserId },
+      externalInstallationId: workspaceId,
+      externalInstallationName:
+        stringValue(result.team) ?? stringValue(result.url) ?? workspaceId,
+    };
+  }
+
+  handlePendingWebhook(
+    request: PendingWebhook,
+  ): PendingWebhookResponse | undefined {
+    if (request.connector !== this.type) return undefined;
+    const body = jsonBody(Buffer.from(request.rawBodyBase64, "base64"));
+    if (body?.type !== "url_verification") return undefined;
+    const challenge = stringValue(body.challenge);
+    if (!challenge) return { status: 400, body: "Missing challenge" };
+    return {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ challenge }),
+    };
   }
 
   verifyAndParse(
@@ -581,3 +721,5 @@ async function parseResponse(response: Response): Promise<JsonObject> {
 export const createSlackConnector = (
   options: SlackConnectorOptions = {},
 ): SlackConnector => new SlackConnector(options);
+
+export default new SlackConnector() satisfies ConnectorModule;
