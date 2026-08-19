@@ -1,0 +1,163 @@
+name: Publish npm package
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact release tag
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Validate immutable release inputs
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          pnpm exec node scripts/npm-release-preflight.mjs | tee release-preflight.txt
+          cat release-preflight.txt >> "$GITHUB_OUTPUT"
+
+      - name: Record stable compatibility counterparts
+        id: counterparts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          stable_client=$(pnpm view agentchannels dist-tags.latest --json 2>/dev/null \
+            | tr -d '"' || true)
+          stable_relay=$(docker buildx imagetools inspect \
+            ghcr.io/agentchannels/agentchannels-relay:latest \
+            --format '{{json .Manifest.Digest}}' 2>/dev/null \
+            | tr -d '"' || true)
+          printf 'stable_client=%s\nstable_relay_digest=%s\n' \
+            "${stable_client:-missing}" "${stable_relay:-missing}" \
+            | tee compatibility-counterparts.txt
+          printf 'stable_client=%s\nstable_relay_digest=%s\n' \
+            "${stable_client:-missing}" "${stable_relay:-missing}" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Install and verify candidate
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm check
+
+      - name: Build and inspect tarball
+        id: tarball
+        run: |
+          mkdir -p .release/package .release/smoke
+          pnpm pack --pack-destination .release/package
+          tarball=$(find .release/package -maxdepth 1 -name '*.tgz' -print -quit)
+          test -n "$tarball"
+          tarball=$(realpath "$tarball")
+          tar -tzf "$tarball" | tee .release/tarball-contents.txt
+          grep -qx 'package/dist/cli.js' .release/tarball-contents.txt
+          grep -qx 'package/dist/index.js' .release/tarball-contents.txt
+          grep -qx 'package/scripts/restore-database.mjs' .release/tarball-contents.txt
+          if grep -E '(^|/)(\.env|coverage|node_modules|agentchannels\.db)(/|$)' \
+            .release/tarball-contents.txt; then
+            echo "tarball contains local or generated state" >&2
+            exit 1
+          fi
+          printf 'path=%s\n' "$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Install tarball in isolation and smoke CLI
+        run: |
+          pnpm --dir .release/smoke init --bare
+          pnpm --dir .release/smoke add --save-exact "${{ steps.tarball.outputs.path }}"
+          test "$(pnpm --dir .release/smoke exec agentchannels --version)" = \
+            "${{ steps.release.outputs.version }}"
+          pnpm --dir .release/smoke exec agentchannels --help
+
+      - name: Refuse an existing npm version
+        run: |
+          if pnpm view "agentchannels@${{ steps.release.outputs.version }}" version \
+            >/dev/null 2>&1; then
+            echo "npm version already exists" >&2
+            exit 1
+          fi
+
+      - name: Verify protocol compatibility prerequisites
+        env:
+          CANDIDATE_RELAY_IMAGE: ${{ vars.AGENTCHANNELS_RELAY_CANDIDATE_IMAGE }}
+          STABLE_CLIENT: ${{ steps.counterparts.outputs.stable_client }}
+          STABLE_RELAY_DIGEST: ${{ steps.counterparts.outputs.stable_relay_digest }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_RELAY_IMAGE" =~ ^ghcr\.io/agentchannels/agentchannels-relay@sha256:[0-9a-f]{64}$ ]] || {
+            echo "AGENTCHANNELS_RELAY_CANDIDATE_IMAGE must be an exact official image digest" >&2
+            exit 1
+          }
+          cleanup() { docker rm -f agentchannels-conformance >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          run_pair() {
+            relay_image=$1
+            client_module=$2
+            cleanup
+            docker run --detach --rm --name agentchannels-conformance \
+              --publish 127.0.0.1:8787:8787 \
+              --env AGENTCHANNELS_RELAY_ENROLLMENT_TOKEN=conformance-token \
+              "$relay_image"
+            for _ in $(seq 1 30); do
+              if curl --silent --output /dev/null http://127.0.0.1:8787/; then break; fi
+              sleep 1
+            done
+            AGENTCHANNELS_CONFORMANCE_ENROLLMENT_TOKEN=conformance-token \
+              pnpm exec node scripts/protocol-conformance.mjs \
+              --origin http://127.0.0.1:8787 \
+              --client-module "$client_module"
+          }
+
+          run_pair "$CANDIDATE_RELAY_IMAGE" \
+            "file://$PWD/dist/index.js"
+          if test "$STABLE_RELAY_DIGEST" != missing; then
+            run_pair \
+              "ghcr.io/agentchannels/agentchannels-relay@$STABLE_RELAY_DIGEST" \
+              "file://$PWD/dist/index.js"
+          fi
+          if test "$STABLE_CLIENT" != missing; then
+            mkdir -p .release/stable-client
+            pnpm --dir .release/stable-client init --bare
+            pnpm --dir .release/stable-client add --save-exact \
+              "agentchannels@$STABLE_CLIENT"
+            run_pair "$CANDIDATE_RELAY_IMAGE" \
+              "file://$PWD/.release/stable-client/node_modules/agentchannels/dist/index.js"
+            pnpm exec node scripts/verify-upgrade-rollback.mjs \
+              --previous-client-module \
+              .release/stable-client/node_modules/agentchannels/dist/index.js
+          fi
+
+      - name: Publish with Trusted Publishing
+        run: >-
+          pnpm publish "${{ steps.tarball.outputs.path }}"
+          --access public
+          --provenance
+          --tag "${{ steps.release.outputs.dist_tag }}"
