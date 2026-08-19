@@ -18,9 +18,10 @@ import { migrate } from "./schema.js";
 export type Installation = {
   id: string;
   publicKey: string;
-  relayUrl: string | null;
+  relayOrigin: string | null;
   createdAt: string;
-  lastSeenAt: string | null;
+  enrolledAt: string | null;
+  lastConnectedAt: string | null;
 };
 
 export type AccessGrant = {
@@ -106,6 +107,10 @@ export type CreateSessionInput = {
 export type PersistenceOptions = {
   /** Completed sessions remain resumable for this long unless explicitly overridden. */
   sessionRetentionMs?: number;
+  backupDirectory?: string;
+  componentVersion?: string;
+  migrationNow?: () => Date;
+  backupDatabase?: (source: string, destination: string) => void;
 };
 
 const id = (prefix: string) => `${prefix}_${randomUUID().replaceAll("-", "")}`;
@@ -244,9 +249,23 @@ export class Persistence {
     this.db = new Database(filename);
     this.retentionMs = options.sessionRetentionMs ?? 30 * 24 * 60 * 60 * 1000;
     this.db.pragma("foreign_keys = ON");
-    this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
-    migrate(this.db);
+    migrate(this.db, {
+      filename,
+      ...(options.backupDirectory === undefined
+        ? {}
+        : { backupDirectory: options.backupDirectory }),
+      ...(options.componentVersion === undefined
+        ? {}
+        : { componentVersion: options.componentVersion }),
+      ...(options.migrationNow === undefined
+        ? {}
+        : { now: options.migrationNow }),
+      ...(options.backupDatabase === undefined
+        ? {}
+        : { backupDatabase: options.backupDatabase }),
+    });
+    this.db.pragma("journal_mode = WAL");
   }
   close(): void {
     this.db.close();
@@ -323,25 +342,30 @@ export class Persistence {
   createInstallation(input: {
     id?: string;
     publicKey: string;
-    relayUrl?: string | null;
+    relayOrigin?: string | null;
+    enrolledAt?: string | null;
+    lastConnectedAt?: string | null;
     createdAt?: string;
   }): Installation {
     const installation: Installation = {
       id: input.id ?? id("in"),
       publicKey: input.publicKey,
-      relayUrl: input.relayUrl ?? null,
+      relayOrigin: input.relayOrigin ?? null,
       createdAt: iso(input.createdAt),
-      lastSeenAt: null,
+      enrolledAt: input.enrolledAt ?? null,
+      lastConnectedAt: input.lastConnectedAt ?? null,
     };
     this.db
       .prepare(
-        "INSERT INTO installations(id,public_key,relay_url,created_at,last_seen_at) VALUES (?,?,?,?,NULL)",
+        "INSERT INTO installations(id,public_key,relay_origin,created_at,enrolled_at,last_connected_at) VALUES (?,?,?,?,?,?)",
       )
       .run(
         installation.id,
         installation.publicKey,
-        installation.relayUrl,
+        installation.relayOrigin,
         installation.createdAt,
+        installation.enrolledAt,
+        installation.lastConnectedAt,
       );
     return installation;
   }
@@ -353,14 +377,39 @@ export class Persistence {
     return {
       id: row.id as string,
       publicKey: row.public_key as string,
-      relayUrl: (row.relay_url as string | null) ?? null,
+      relayOrigin: (row.relay_origin as string | null) ?? null,
       createdAt: row.created_at as string,
-      lastSeenAt: (row.last_seen_at as string | null) ?? null,
+      enrolledAt: (row.enrolled_at as string | null) ?? null,
+      lastConnectedAt: (row.last_connected_at as string | null) ?? null,
     };
+  }
+  setInstallationRelay(
+    installationId: string,
+    relayOrigin: string,
+    enrolledAt = new Date(),
+  ): Installation {
+    const result = this.db
+      .prepare(
+        "UPDATE installations SET relay_origin=?,enrolled_at=? WHERE id=?",
+      )
+      .run(relayOrigin, iso(enrolledAt), installationId);
+    if (result.changes !== 1)
+      throw new Error(`Installation ${installationId} not found`);
+    return required(
+      this.getInstallation(installationId),
+      `Installation ${installationId} disappeared after Relay update`,
+    );
+  }
+  getInstallationState(): Installation | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM installations ORDER BY created_at,id LIMIT 1")
+      .get() as Record<string, unknown> | undefined;
+    if (row === undefined) return undefined;
+    return this.getInstallation(row.id as string);
   }
   touchInstallation(installationId: string, at = new Date()): void {
     this.db
-      .prepare("UPDATE installations SET last_seen_at = ? WHERE id = ?")
+      .prepare("UPDATE installations SET last_connected_at = ? WHERE id = ?")
       .run(iso(at), installationId);
   }
 
@@ -425,6 +474,18 @@ export class Persistence {
           "SELECT * FROM binding_setups WHERE agent_id=? ORDER BY created_at,id",
         )
         .all(agentId) as Record<string, unknown>[]
+    ).map((row) => ({
+      id: row.id as string,
+      agentId: row.agent_id as string,
+      connector: row.connector as ConnectorType,
+      createdAt: row.created_at as string,
+    }));
+  }
+  listAllBindingSetups(): BindingSetup[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM binding_setups ORDER BY created_at,id")
+        .all() as Record<string, unknown>[]
     ).map((row) => ({
       id: row.id as string,
       agentId: row.agent_id as string,

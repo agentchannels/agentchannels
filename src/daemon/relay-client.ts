@@ -7,6 +7,7 @@ import {
   type RelayToLocalMessage,
 } from "../protocol/messages.js";
 import type { InstallationIdentityService } from "../security/identity.js";
+import type { RelayEndpoints } from "../relay/origin.js";
 
 export type RelayWebhook = Extract<RelayToLocalMessage, { type: "webhook" }>;
 export type RelayWebhookResponse = {
@@ -16,7 +17,7 @@ export type RelayWebhookResponse = {
 };
 
 export type RelayClientOptions = {
-  relayUrl: string;
+  endpoints: RelayEndpoints;
   identity: InstallationIdentityService;
   listBindings(): readonly Binding[];
   handleWebhook(request: RelayWebhook): Promise<RelayWebhookResponse>;
@@ -35,24 +36,6 @@ export class RelayClient {
   private authenticated = false;
 
   public constructor(private readonly options: RelayClientOptions) {}
-
-  public async register(): Promise<void> {
-    const identity = await this.options.identity.getOrCreate();
-    const endpoint = new URL(
-      "/v1/installations",
-      this.options.relayUrl.replace(/^ws/, "http"),
-    );
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(identity),
-    });
-    if (!response.ok) {
-      throw new Error(
-        `Relay installation registration failed: HTTP ${String(response.status)}`,
-      );
-    }
-  }
 
   public async run(): Promise<void> {
     this.stopping = false;
@@ -110,8 +93,7 @@ export class RelayClient {
 
   private connectOnce(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const endpoint = new URL("/v1/connect", this.options.relayUrl);
-      const socket = new WebSocket(endpoint);
+      const socket = new WebSocket(this.options.endpoints.websocketUrl);
       this.socket = socket;
       let authenticated = false;
 
@@ -141,7 +123,17 @@ export class RelayClient {
     socket: WebSocket,
     raw: string,
   ): Promise<boolean> {
-    const message = relayToLocalMessageSchema.parse(JSON.parse(raw));
+    let wireMessage: unknown;
+    try {
+      wireMessage = JSON.parse(raw);
+    } catch {
+      throw new Error("Relay invalid_message: incompatible protocol message");
+    }
+    const parsed = relayToLocalMessageSchema.safeParse(wireMessage);
+    if (!parsed.success) {
+      throw new Error("Relay invalid_message: incompatible protocol message");
+    }
+    const message = parsed.data;
     switch (message.type) {
       case "challenge": {
         const identity = await this.options.identity.getOrCreate();

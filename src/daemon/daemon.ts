@@ -15,9 +15,9 @@ import {
 } from "../security/identity.js";
 import { IngressService } from "./ingress-service.js";
 import { RelayClient } from "./relay-client.js";
+import { RelayManager } from "../relay/manager.js";
 
 export type DaemonOptions = {
-  relayUrl: string;
   concurrency?: number;
   home?: string;
 };
@@ -29,17 +29,14 @@ export async function startDaemon(options: DaemonOptions): Promise<void> {
       : { ...process.env, AGENTCHANNELS_HOME: options.home };
   const paths = resolveProductPaths(environment);
   ensureProductPaths(paths);
-  const store = new Persistence(paths.database);
+  const store = new Persistence(paths.database, {
+    backupDirectory: paths.backups,
+  });
   const keyring = new KeyringCredentialStore();
   const identityService = new InstallationIdentityService(keyring);
+  const relayManager = new RelayManager({ store, identity: identityService });
+  const relayEndpoints = await relayManager.ensureHosted();
   const installation = await identityService.getOrCreate();
-  if (store.getInstallation(installation.installationId) === undefined) {
-    store.createInstallation({
-      id: installation.installationId,
-      publicKey: installation.publicKeyBase64,
-      relayUrl: options.relayUrl,
-    });
-  }
   const bindingCredentials = new BindingCredentialService(keyring);
   const connectorList: Connector[] = [
     new LinearConnector(),
@@ -72,7 +69,7 @@ export async function startDaemon(options: DaemonOptions): Promise<void> {
     },
   });
   const relay = new RelayClient({
-    relayUrl: options.relayUrl,
+    endpoints: relayEndpoints,
     identity: identityService,
     listBindings: () => store.listAllBindings(),
     handleWebhook: (request) => ingress.handle(request),
@@ -121,7 +118,6 @@ export async function startDaemon(options: DaemonOptions): Promise<void> {
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   try {
-    await relay.register();
     await relay.run();
   } finally {
     clearInterval(timer);
