@@ -35,5 +35,16 @@ jobs:
       - name: Verify repository
         run: pnpm check
 
+      - name: Verify source-checkout first run
+        run: |
+          root=$(mktemp -d)
+          git init --initial-branch main "$root/repository"
+          git -C "$root/repository" \
+            -c user.name='AgentChannels CI' \
+            -c user.email='ci@example.invalid' \
+            commit --allow-empty -m initial
+          pnpm start -- init --home "$root/home" \
+            --cwd "$root/repository" --json
+
       - name: Inspect package contents
         run: pnpm pack --dry-run
