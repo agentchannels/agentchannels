@@ -1,0 +1,134 @@
+import { LinearConnector } from "../connectors/linear.js";
+import { SlackConnector } from "../connectors/slack.js";
+import type { Connector } from "../connectors/connector.js";
+import type { ConnectorType } from "../core/types.js";
+import { DeliveryWorker } from "../core/delivery-worker.js";
+import { ensureProductPaths, resolveProductPaths } from "../core/paths.js";
+import { SessionCoordinator } from "../core/session-coordinator.js";
+import { SessionRetentionCleaner } from "../core/retention.js";
+import { Persistence } from "../persistence/store.js";
+import { ClaudeRuntime } from "../runtime/claude.js";
+import { KeyringCredentialStore } from "../security/credentials.js";
+import {
+  BindingCredentialService,
+  InstallationIdentityService,
+} from "../security/identity.js";
+import { IngressService } from "./ingress-service.js";
+import { RelayClient } from "./relay-client.js";
+
+export type DaemonOptions = {
+  relayUrl: string;
+  concurrency?: number;
+  home?: string;
+};
+
+export async function startDaemon(options: DaemonOptions): Promise<void> {
+  const environment =
+    options.home === undefined
+      ? process.env
+      : { ...process.env, AGENTCHANNELS_HOME: options.home };
+  const paths = resolveProductPaths(environment);
+  ensureProductPaths(paths);
+  const store = new Persistence(paths.database);
+  const keyring = new KeyringCredentialStore();
+  const identityService = new InstallationIdentityService(keyring);
+  const installation = await identityService.getOrCreate();
+  if (store.getInstallation(installation.installationId) === undefined) {
+    store.createInstallation({
+      id: installation.installationId,
+      publicKey: installation.publicKeyBase64,
+      relayUrl: options.relayUrl,
+    });
+  }
+  const bindingCredentials = new BindingCredentialService(keyring);
+  const connectorList: Connector[] = [
+    new LinearConnector(),
+    new SlackConnector(),
+  ];
+  const connectors = new Map<ConnectorType, Connector>(
+    connectorList.map((connector) => [connector.type, connector]),
+  );
+  const sessions = new SessionCoordinator({
+    store,
+    runtime: new ClaudeRuntime(),
+    worktreeRoot: paths.worktrees,
+    concurrency: options.concurrency ?? 2,
+  });
+  const recovery = sessions.recoverAfterCrash();
+  if (recovery.sessions > 0 || recovery.deliveries > 0) {
+    process.stderr.write(
+      `Recovered ${String(recovery.sessions)} interrupted Session(s) and ${String(recovery.deliveries)} pending delivery attempt(s).\n`,
+    );
+  }
+  const ingress = new IngressService({
+    store,
+    credentials: bindingCredentials,
+    connectors,
+    sessions,
+    onError: ({ bindingId, requestId, error }) => {
+      process.stderr.write(
+        `Ingress error binding=${bindingId} request=${requestId}: ${error}\n`,
+      );
+    },
+  });
+  const relay = new RelayClient({
+    relayUrl: options.relayUrl,
+    identity: identityService,
+    listBindings: () => store.listAllBindings(),
+    handleWebhook: (request) => ingress.handle(request),
+    onStateChange: (connected) => {
+      if (connected) store.touchInstallation(installation.installationId);
+      process.stderr.write(
+        `Relay ${connected ? "connected" : "disconnected"}.\n`,
+      );
+    },
+  });
+  const deliveries = new DeliveryWorker({
+    store,
+    credentials: bindingCredentials,
+    connectors,
+  });
+  const retention = new SessionRetentionCleaner(store, paths.worktrees);
+  await retention.clean();
+  let draining = false;
+  const timer = setInterval(() => {
+    if (draining) return;
+    draining = true;
+    void deliveries
+      .drain()
+      .catch((error: unknown) => {
+        process.stderr.write(
+          `Delivery worker failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      })
+      .finally(() => {
+        draining = false;
+      });
+  }, 250);
+  timer.unref();
+  const retentionTimer = setInterval(() => {
+    void retention.clean().catch((error: unknown) => {
+      process.stderr.write(
+        `Retention cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    });
+  }, 60 * 60_000);
+  retentionTimer.unref();
+  const bindingSyncTimer = setInterval(() => relay.syncBindings(), 1_000);
+  bindingSyncTimer.unref();
+
+  const stop = (): void => relay.stop();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  try {
+    await relay.register();
+    await relay.run();
+  } finally {
+    clearInterval(timer);
+    clearInterval(retentionTimer);
+    clearInterval(bindingSyncTimer);
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+    store.close();
+  }
+}
