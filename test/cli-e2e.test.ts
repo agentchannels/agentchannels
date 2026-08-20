@@ -173,6 +173,15 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
+function stripAnsi(value: string): string {
+  return value
+    .split(String.fromCharCode(27))
+    .map((segment, index) =>
+      index === 0 ? segment : segment.replace(/^\[[0-9;]*m/, ""),
+    )
+    .join("");
+}
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "agentchannels-cli-e2e-"));
   roots.push(root);
@@ -313,9 +322,9 @@ describe("CLI end-to-end stories", () => {
       ["--home", f.home, "init", "--cwd", f.repository],
       { from: "user" },
     );
-    const humanOutput = write.mock.calls
-      .map(([value]) => String(value))
-      .join("");
+    const humanOutput = stripAnsi(
+      write.mock.calls.map(([value]) => String(value)).join(""),
+    );
     expect(humanOutput).toContain("✓ Slack connected to Slack Workspace");
     expect(humanOutput).toContain("✓ Linear connected to Linear Workspace");
     expect(humanOutput).toContain("✓ Background daemon running");
