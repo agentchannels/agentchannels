@@ -21,6 +21,22 @@ function run(args, options = {}) {
   return result;
 }
 
+function runJson(args, options = {}) {
+  const result = run(args, options);
+  if (result.stderr !== "")
+    throw new Error(
+      `agentchannels ${args.join(" ")} wrote diagnostics in JSON mode: ${result.stderr}`,
+    );
+  try {
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(
+      `agentchannels ${args.join(" ")} did not emit JSON: ${result.stdout}`,
+      { cause: error },
+    );
+  }
+}
+
 function createRepository(path) {
   execFileSync("git", ["init", "--initial-branch", "main", path], {
     stdio: "ignore",
@@ -45,17 +61,32 @@ try {
   const repository = join(root, "repository");
   const home = join(root, "home");
   createRepository(repository);
-  const first = JSON.parse(
-    run(["--home", home, "--json", "init", "--cwd", repository]).stdout,
-  );
-  const second = JSON.parse(
-    run(["--home", home, "--json", "init", "--cwd", repository]).stdout,
-  );
+  const help = run(["--help"]);
+  if (!help.stdout.includes("Usage: agentchannels"))
+    throw new Error("published CLI did not render help");
+  if (help.stderr !== "")
+    throw new Error(`published CLI wrote help diagnostics: ${help.stderr}`);
+  const first = runJson([
+    "--home",
+    home,
+    "--json",
+    "init",
+    "--cwd",
+    repository,
+  ]);
+  const second = runJson([
+    "--home",
+    home,
+    "--json",
+    "init",
+    "--cwd",
+    repository,
+  ]);
   if (first.agent.id !== second.agent.id)
     throw new Error("idempotent init created a duplicate Agent");
-  const status = JSON.parse(
-    run(["--home", home, "--json", "status"], { cwd: repository }).stdout,
-  );
+  const status = runJson(["--home", home, "--json", "status"], {
+    cwd: repository,
+  });
   if (status.status !== "ready" || status.currentAgentId !== first.agent.id)
     throw new Error("global status did not reflect the initialized Agent");
 
@@ -70,7 +101,7 @@ pid, fd = pty.fork()
 if pid == 0:
     os.execv(binary, [binary, "--home", home, "init", "--cwd", cwd])
 output = b""
-while b"Name [" not in output:
+while b"Name" not in output:
     output += os.read(fd, 1024)
 os.kill(pid, signal.SIGINT)
 while True:
@@ -94,9 +125,12 @@ sys.exit(os.waitstatus_to_exitcode(status))
       throw new Error(
         `cancellation contract failed (${String(cancelled.status)}): ${cancelled.stdout} ${cancelled.stderr}`,
       );
-    const cancelledStatus = JSON.parse(
-      run(["--home", cancelledHome, "--json", "status"]).stdout,
-    );
+    const cancelledStatus = runJson([
+      "--home",
+      cancelledHome,
+      "--json",
+      "status",
+    ]);
     if (cancelledStatus.agents.length !== 0)
       throw new Error("cancelled init persisted an Agent before confirmation");
   }

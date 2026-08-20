@@ -7,6 +7,8 @@ export { linuxServicePlatform, renderSystemdUnit } from "./linux.js";
 export { macosServicePlatform, renderLaunchAgent } from "./macos.js";
 export {
   PrivilegedServiceError,
+  ServiceCommandError,
+  ServiceManagerError,
   UnsupportedServicePlatformError,
 } from "./guards.js";
 export { SERVICE_NAME, SERVICE_VERSION_ENV } from "./types.js";
@@ -17,6 +19,8 @@ export type {
   ServiceDefinition,
   ServiceFileSystem,
   ServiceManagerOptions,
+  ServiceOperation,
+  ServiceOperationResult,
   ServicePlatformAdapter,
   ServicePlatformFactory,
   ServicePlatformRegistry,

@@ -14,6 +14,7 @@ export class MapServicePlatformRegistry implements ServicePlatformRegistry {
         platform: "registry",
         homeDirectory: "",
         uid: 0,
+        serviceIdentifier: "registry",
         fileSystem: {
           read: async () => null,
           write: async () => undefined,

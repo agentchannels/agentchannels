@@ -55,7 +55,11 @@ class FailingOnceConnector implements Connector {
     void credentials;
     if (this.failuresRemaining > 0) {
       this.failuresRemaining -= 1;
-      return Promise.reject(new Error("Slack is temporarily offline"));
+      return Promise.reject(
+        new Error(
+          "Slack is temporarily offline; botToken=xoxb-syntheticSecret123",
+        ),
+      );
     }
     this.delivered.push(message);
     return Promise.resolve();
@@ -123,7 +127,7 @@ it("retries channel delivery independently after execution has completed", async
   expect(store.getDelivery(delivery.id)).toMatchObject({
     status: "retrying",
     attempts: 1,
-    lastError: "Slack is temporarily offline",
+    lastError: "Slack is temporarily offline; botToken=[redacted]",
   });
 
   const retrying = store.getDelivery(delivery.id);

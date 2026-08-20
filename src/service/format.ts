@@ -1,9 +1,23 @@
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { join, resolve } from "node:path";
 import type { ServiceCommand, ServiceDefinition } from "./types.js";
 import { SERVICE_NAME, SERVICE_VERSION_ENV } from "./types.js";
 
 export function serviceName(): string {
   return SERVICE_NAME;
+}
+
+export function scopedServiceName(
+  productHome: string,
+  homeDirectory: string,
+): string {
+  if (resolve(productHome) === resolve(homeDirectory, ".agentchannels"))
+    return SERVICE_NAME;
+  const scope = createHash("sha256")
+    .update(resolve(productHome))
+    .digest("hex")
+    .slice(0, 12);
+  return `${SERVICE_NAME}-${scope}`;
 }
 
 export function commandEnvironment(

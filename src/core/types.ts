@@ -73,6 +73,7 @@ export type ConnectorCommand =
       remoteConversationId: string;
       remoteUserId: string;
       text: string;
+      allowNewSession?: boolean;
     }
   | {
       type: "stop";

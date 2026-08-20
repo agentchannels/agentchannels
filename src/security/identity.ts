@@ -7,6 +7,11 @@ import {
 
 import type { CredentialStore } from "./credentials.js";
 
+export type IdentityFetchLike = (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => Promise<Response>;
+
 const installationMetadataKey = "installation:metadata";
 const installationPrivateKey = "installation:private-key";
 
@@ -18,8 +23,9 @@ export type InstallationIdentity = {
 export async function issueLinearClientCredentials(
   clientId: string,
   clientSecret: string,
+  fetcher: IdentityFetchLike = fetch,
 ): Promise<{ apiToken: string; expiresAt: string }> {
-  const response = await fetch("https://api.linear.app/oauth/token", {
+  const response = await fetcher("https://api.linear.app/oauth/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -120,7 +126,14 @@ export class InstallationIdentityService {
 }
 
 export class BindingCredentialService {
-  public constructor(private readonly credentials: CredentialStore) {}
+  private readonly fetcher: IdentityFetchLike | undefined;
+
+  public constructor(
+    private readonly credentials: CredentialStore,
+    options: Readonly<{ fetch?: IdentityFetchLike }> = {},
+  ) {
+    this.fetcher = options.fetch;
+  }
 
   public get(bindingId: string): Promise<string | null> {
     return this.credentials.get(`binding:${bindingId}`);
@@ -131,6 +144,10 @@ export class BindingCredentialService {
     values: Readonly<Record<string, string>>,
   ): Promise<void> {
     return this.credentials.set(`binding:${bindingId}`, JSON.stringify(values));
+  }
+
+  public delete(bindingId: string): Promise<void> {
+    return this.credentials.delete(`binding:${bindingId}`);
   }
 
   public async require(
@@ -152,6 +169,7 @@ export class BindingCredentialService {
         await issueLinearClientCredentials(
           credentials.clientId,
           credentials.clientSecret,
+          this.fetcher ?? fetch,
         ),
       );
       credentials.accessToken = credentials.apiToken ?? "";
@@ -171,11 +189,14 @@ export class BindingCredentialService {
         client_id: credentials.clientId,
         client_secret: credentials.clientSecret,
       });
-      const response = await fetch("https://api.linear.app/oauth/token", {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body,
-      });
+      const response = await (this.fetcher ?? fetch)(
+        "https://api.linear.app/oauth/token",
+        {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body,
+        },
+      );
       const refreshed = (await response.json()) as {
         access_token?: string;
         refresh_token?: string;

@@ -15,6 +15,10 @@ import {
 import { IngressService } from "./ingress-service.js";
 import { RelayClient } from "./relay-client.js";
 import { RelayManager } from "../relay/manager.js";
+import {
+  redactErrorDiagnostic,
+  redactSensitiveText,
+} from "../security/redaction.js";
 
 export type DaemonOptions = {
   concurrency?: number;
@@ -69,7 +73,7 @@ export async function startDaemon(options: DaemonOptions): Promise<void> {
     sessions,
     onError: ({ bindingId, requestId, error }) => {
       process.stderr.write(
-        `Ingress error binding=${bindingId} request=${requestId}: ${error}\n`,
+        `Ingress error binding=${bindingId} request=${requestId}: ${redactSensitiveText(error)}\n`,
       );
     },
   });
@@ -103,7 +107,7 @@ export async function startDaemon(options: DaemonOptions): Promise<void> {
       .drain()
       .catch((error: unknown) => {
         process.stderr.write(
-          `Delivery worker failed: ${error instanceof Error ? error.message : String(error)}\n`,
+          `Delivery worker failed: ${redactErrorDiagnostic(error)}\n`,
         );
       })
       .finally(() => {
@@ -114,7 +118,7 @@ export async function startDaemon(options: DaemonOptions): Promise<void> {
   const retentionTimer = setInterval(() => {
     void retention.clean().catch((error: unknown) => {
       process.stderr.write(
-        `Retention cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`,
+        `Retention cleanup failed: ${redactErrorDiagnostic(error)}\n`,
       );
     });
   }, 60 * 60_000);

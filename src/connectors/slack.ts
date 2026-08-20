@@ -1,5 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import {
+  MalformedConnectorCredentialsError,
+  ProviderRejectedError,
+} from "./connector.js";
 import type {
   Connector,
   ConnectorCredentials,
@@ -314,7 +318,9 @@ export class SlackConnector implements Connector, ConnectorModule {
     const token = credentials.botToken;
     const signingSecret = credentials.signingSecret;
     if (!token || !signingSecret)
-      throw new Error("Slack Bot Token and Signing Secret are required");
+      throw new MalformedConnectorCredentialsError(
+        "Slack Bot Token and Signing Secret are required",
+      );
     const response = await this.fetcher(`${this.apiBaseUrl}/auth.test`, {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
@@ -323,7 +329,7 @@ export class SlackConnector implements Connector, ConnectorModule {
     const workspaceId = stringValue(result.team_id);
     const botUserId = stringValue(result.user_id);
     if (!response.ok || result.ok !== true || !workspaceId || !botUserId) {
-      throw new Error(
+      throw new ProviderRejectedError(
         `Slack rejected the Bot Token: ${stringValue(result.error) ?? `HTTP ${String(response.status)}`}`,
       );
     }
@@ -456,6 +462,7 @@ export class SlackConnector implements Connector, ConnectorModule {
           remoteConversationId,
           remoteUserId,
           text: text.replace(/<@[A-Z0-9]+>/g, "").trim(),
+          allowNewSession: event.type === "app_mention" || isDirectMessage,
         },
       };
     }

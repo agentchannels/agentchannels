@@ -38,13 +38,31 @@ jobs:
       - name: Verify source-checkout first run
         run: |
           root=$(mktemp -d)
+          rm -rf dist
           git init --initial-branch main "$root/repository"
           git -C "$root/repository" \
             -c user.name='AgentChannels CI' \
             -c user.email='ci@example.invalid' \
             commit --allow-empty -m initial
-          pnpm start -- init --home "$root/home" \
-            --cwd "$root/repository" --json
+          pnpm --silent start -- --help > "$root/help.txt"
+          grep -q '^Usage: agentchannels' "$root/help.txt"
+          if grep -q 'CLI Building\|ESM Build\|DTS Build' "$root/help.txt"; then exit 1; fi
+          pnpm --silent start -- init --home "$root/home" \
+            --cwd "$root/repository" --json > "$root/init.json"
+          INIT_JSON="$root/init.json" node --input-type=module -e \
+            'import { readFile } from "node:fs/promises"; JSON.parse(await readFile(process.env.INIT_JSON, "utf8"));'
+          if grep -q 'CLI Building\|ESM Build\|DTS Build' "$root/init.json"; then exit 1; fi
 
       - name: Inspect package contents
         run: pnpm pack --dry-run
+
+      - name: Smoke-test the isolated package
+        run: |
+          mkdir -p .ci/package .ci/smoke
+          pnpm pack --pack-destination .ci/package
+          tarball=$(find .ci/package -maxdepth 1 -name '*.tgz' -print -quit)
+          test -n "$tarball"
+          pnpm --dir .ci/smoke init --bare
+          pnpm --dir .ci/smoke add --save-exact "$PWD/$tarball"
+          pnpm exec node scripts/first-run-smoke.mjs \
+            "$PWD/.ci/smoke/node_modules/.bin/agentchannels"

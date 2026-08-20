@@ -1,3 +1,5 @@
+import type { ServiceCommandResult } from "./types.js";
+
 export class UnsupportedServicePlatformError extends Error {
   readonly code = "UNSUPPORTED_SERVICE_PLATFORM";
 
@@ -18,6 +20,53 @@ export class PrivilegedServiceError extends Error {
     );
     this.name = "PrivilegedServiceError";
   }
+}
+
+export class ServiceManagerError extends Error {
+  readonly code = "SERVICE_MANAGER_FAILED";
+
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "ServiceManagerError";
+  }
+}
+
+/** A service-manager command failed; stdout/stderr remain available for debug output. */
+export class ServiceCommandError extends Error {
+  readonly code = "SERVICE_COMMAND_FAILED";
+
+  constructor(
+    readonly executable: string,
+    readonly args: readonly string[],
+    readonly exitCode: number,
+    readonly stdout: string,
+    readonly stderr: string,
+    cause?: unknown,
+  ) {
+    const diagnostic = (stderr.trim() || stdout.trim()).replace(/\s+/g, " ");
+    super(
+      `Service command failed with exit code ${String(exitCode)}${diagnostic === "" ? "" : `: ${diagnostic}`}`,
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = "ServiceCommandError";
+  }
+}
+
+/** Keep expected "inactive" exits idempotent while surfacing manager failures. */
+export function assertExpectedServiceExit(
+  executable: string,
+  args: readonly string[],
+  result: ServiceCommandResult,
+  expected: readonly number[],
+): void {
+  if (expected.includes(result.exitCode)) return;
+  throw new ServiceCommandError(
+    executable,
+    args,
+    result.exitCode,
+    result.stdout,
+    result.stderr,
+  );
 }
 
 export function assertUserServiceMutation(options: {

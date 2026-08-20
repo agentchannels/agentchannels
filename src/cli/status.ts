@@ -1,6 +1,8 @@
 import type { Persistence } from "../persistence/store.js";
 import { HOSTED_RELAY_ORIGIN } from "../relay/origin.js";
 import type { ServiceStatus } from "../service/index.js";
+import { redactSecrets } from "./errors.js";
+import { plainTerminalFormatter, type TerminalFormatter } from "./format.js";
 
 export type InstallationOverview = Readonly<{
   status: "uninitialized" | "ready" | "action_required" | "degraded";
@@ -17,6 +19,16 @@ export type InstallationOverview = Readonly<{
   sessions: ReturnType<Persistence["listSessions"]>;
   daemon?: ServiceStatus;
 }>;
+
+function safePersistedError(value: string | null): string | null {
+  if (value === null) return null;
+  return redactSecrets(value).split(/\r?\n/, 1)[0]?.trim() ?? "";
+}
+
+function oneNextStep(value: readonly string[]): readonly string[] {
+  const first = value[0];
+  return first === undefined ? [] : [redactSecrets(first)];
+}
 
 export function installationOverview(
   store: Persistence | undefined,
@@ -52,15 +64,29 @@ export function installationOverview(
     .filter((binding) => selectedIds?.has(binding.agentId) ?? true);
   const pendingSetups = store
     .listAllBindingSetups()
-    .filter((setup) => selectedIds?.has(setup.agentId) ?? true);
+    .filter((setup) => selectedIds?.has(setup.agentId) ?? true)
+    .map((setup) => ({
+      ...setup,
+      lastError: safePersistedError(setup.lastError),
+    }));
   const bindingIds = new Set(bindings.map((binding) => binding.id));
   const sessions = store
     .listSessions()
     .filter((session) => bindingIds.has(session.bindingId));
   const installation = store.getInstallationState();
-  const failures = pendingSetups.filter((setup) => setup.lastError !== null);
-  const actionRequired = agents.length === 0 || pendingSetups.length > 0;
-  const nextSteps =
+  const failures = pendingSetups.filter(
+    (setup) => setup.lastError !== null && setup.lastError.trim().length > 0,
+  );
+  const relayActionRequired =
+    bindings.length > 0 && installation?.relayOrigin == null;
+  const daemonActionRequired =
+    daemon !== undefined && bindings.length > 0 && !daemon.running;
+  const actionRequired =
+    agents.length === 0 ||
+    pendingSetups.length > 0 ||
+    relayActionRequired ||
+    daemonActionRequired;
+  const nextSteps: readonly string[] =
     agents.length === 0
       ? ["Run agentchannels init in a Git repository."]
       : failures.length > 0
@@ -69,13 +95,17 @@ export function installationOverview(
           ]
         : pendingSetups.length > 0
           ? ["Rerun agentchannels init to resume provider setup."]
-          : bindings.length === 0
-            ? [
-                "Run agentchannels init --connect <connector> to add a connection.",
-              ]
-            : [
-                "Run agentchannels daemon status to verify background availability.",
-              ];
+          : relayActionRequired
+            ? ["Run agentchannels init to finish Relay setup."]
+            : daemonActionRequired
+              ? [
+                  daemon.installed
+                    ? "Run agentchannels daemon start."
+                    : daemon.supported
+                      ? "Run agentchannels daemon install."
+                      : "Run agentchannels daemon in the foreground.",
+                ]
+              : [];
   return {
     status:
       failures.length > 0
@@ -84,7 +114,7 @@ export function installationOverview(
           ? "action_required"
           : "ready",
     actionRequired,
-    nextSteps,
+    nextSteps: oneNextStep(nextSteps),
     currentAgentId: contextual?.id ?? null,
     relay:
       installation?.relayOrigin == null
@@ -104,32 +134,58 @@ export function installationOverview(
   };
 }
 
-export function renderOverview(value: InstallationOverview): string {
+export function renderOverview(
+  value: InstallationOverview,
+  formatter: TerminalFormatter = plainTerminalFormatter,
+): string {
   const lines = ["AgentChannels", "", "Configured:"];
-  if (value.agents.length === 0) lines.push("- No Agents");
+  if (value.agents.length === 0)
+    lines.push(formatter.pending("No Agents configured"));
   else {
     for (const agent of value.agents) {
       const bindings = value.bindings.filter(
         (binding) => binding.agentId === agent.id,
       );
+      const connectors = bindings
+        .map((binding) => binding.connector)
+        .join(", ");
+      const description =
+        bindings.length === 0
+          ? "no connections"
+          : `${bindings.length.toString()} connection(s)${connectors.length === 0 ? "" : `: ${connectors}`}`;
       lines.push(
-        `- ${agent.name}: ${bindings.length.toString()} connection(s)`,
+        `${formatter.success(agent.name)} ${formatter.dim(`(${description})`)}`,
       );
     }
   }
-  lines.push("", "Waiting or failed:");
-  if (value.pendingSetups.length === 0) lines.push("- Nothing pending");
-  else {
+  if (value.pendingSetups.length > 0) {
+    lines.push("", "Waiting or failed:");
     for (const setup of value.pendingSetups) {
-      lines.push(`- ${setup.connector}: ${setup.lastError ?? setup.step}`);
+      lines.push(
+        `- ${setup.connector}: ${redactSecrets(setup.lastError?.trim() ? setup.lastError : setup.step)}`,
+      );
     }
   }
+  if (value.relay.status === "uninitialized" && value.bindings.length > 0)
+    lines.push("", formatter.pending("Relay not configured"));
+  else if (value.relay.mode === "self_hosted")
+    lines.push("", "Relay: self-hosted");
   if (value.daemon !== undefined) {
     lines.push(
       "",
-      `Daemon: ${value.daemon.running ? "running" : value.daemon.installed ? "stopped" : value.daemon.supported ? "not installed" : "unsupported"}`,
+      value.daemon.running
+        ? formatter.success("Daemon running")
+        : formatter.pending(
+            `Daemon ${value.daemon.installed ? "stopped" : value.daemon.supported ? "not installed" : "unsupported"}`,
+          ),
     );
   }
-  lines.push("", `Next: ${value.nextSteps[0] ?? "No action required."}`);
+  if (value.sessions.length > 0) {
+    lines.push("", "Sessions:");
+    for (const session of value.sessions)
+      lines.push(`- ${redactSecrets(session.status)}`);
+  }
+  if (value.actionRequired && value.nextSteps[0] !== undefined)
+    lines.push("", formatter.pending(redactSecrets(value.nextSteps[0])));
   return lines.join("\n");
 }

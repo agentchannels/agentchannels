@@ -10,6 +10,21 @@ import {
 } from "../src/connectors/slack.js";
 
 describe("official provider onboarding contracts", () => {
+  it.each([
+    "https://localhost/v1/webhooks/linear/bd_setup",
+    "https://127.0.0.1/v1/webhooks/linear/bd_setup",
+    "https://10.0.0.8/v1/webhooks/linear/bd_setup",
+    "https://linear.app/v1/webhooks/linear/bd_setup",
+  ])("rejects a Linear webhook host the provider cannot reach: %s", (url) => {
+    expect(() =>
+      createLinearOwnedManifest({
+        agentName: "Runbear",
+        relayOrigin: new URL(url).origin,
+        relayWebhookUrl: url,
+      }),
+    ).toThrow("publicly reachable");
+  });
+
   it("builds Slack HTTP Events/Interactivity manifest and discovers the workspace through auth.test", async () => {
     const manifest = createSlackAppManifest({
       agentName: "Runbear",

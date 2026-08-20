@@ -1,5 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 
+import {
+  MalformedConnectorCredentialsError,
+  ProviderRejectedError,
+} from "./connector.js";
 import type {
   Connector,
   ConnectorCredentials,
@@ -32,6 +37,39 @@ type JsonObject = Readonly<Record<string, unknown>>;
 const DEFAULT_API_URL = "https://api.linear.app/graphql";
 const DEFAULT_OAUTH_TOKEN_URL = "https://api.linear.app/oauth/token";
 const DEFAULT_REPLAY_WINDOW_MS = 60_000;
+
+function isPrivateLinearWebhookHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host === "linear.app" ||
+    host.endsWith(".linear.app")
+  )
+    return true;
+  const version = isIP(host);
+  if (version === 4) {
+    const octets = host.split(".").map(Number);
+    return (
+      octets[0] === 10 ||
+      octets[0] === 127 ||
+      (octets[0] === 169 && octets[1] === 254) ||
+      (octets[0] === 172 && (octets[1] ?? 0) >= 16 && (octets[1] ?? 0) <= 31) ||
+      (octets[0] === 192 && octets[1] === 168)
+    );
+  }
+  return (
+    version === 6 &&
+    (host === "::1" ||
+      host.startsWith("fc") ||
+      host.startsWith("fd") ||
+      host.startsWith("fe8") ||
+      host.startsWith("fe9") ||
+      host.startsWith("fea") ||
+      host.startsWith("feb"))
+  );
+}
 
 export type LinearAppManifest = Readonly<{
   $schema: "https://linear.app/.well-known/oauth-app-manifest.schema.json";
@@ -66,6 +104,10 @@ export function createLinearOwnedManifest(options: {
   const webhook = new URL(options.relayWebhookUrl);
   if (webhook.protocol !== "https:")
     throw new Error("Linear webhook URL must use HTTPS");
+  if (isPrivateLinearWebhookHost(webhook.hostname))
+    throw new Error(
+      "Linear webhook URL must use a publicly reachable non-Linear host",
+    );
   return {
     $schema: "https://linear.app/.well-known/oauth-app-manifest.schema.json",
     schemaVersion: "1.0.0",
@@ -266,13 +308,15 @@ export class LinearConnector implements Connector, ConnectorModule {
     const clientSecret = credentials.clientSecret;
     const webhookSecret = credentials.webhookSecret;
     if (!webhookSecret)
-      throw new Error("Linear Webhook Signing Secret is required");
+      throw new MalformedConnectorCredentialsError(
+        "Linear Webhook Signing Secret is required",
+      );
     let apiToken = credentials.apiToken;
     let expiresAt = credentials.expiresAt;
     let oauthProvider = credentials.oauthProvider;
     if (!apiToken) {
       if (!clientId || !clientSecret)
-        throw new Error(
+        throw new MalformedConnectorCredentialsError(
           "Linear Client ID and Client Secret are required when no app-actor token is supplied",
         );
       const tokenResponse = await this.fetcher(this.oauthTokenUrl, {
@@ -288,7 +332,7 @@ export class LinearConnector implements Connector, ConnectorModule {
       const tokenResult = await parseResponse(tokenResponse);
       apiToken = stringValue(tokenResult.access_token);
       if (!tokenResponse.ok || !apiToken) {
-        throw new Error(
+        throw new ProviderRejectedError(
           `Linear rejected the client credentials: ${stringValue(tokenResult.error_description) ?? stringValue(tokenResult.error) ?? `HTTP ${String(tokenResponse.status)}`}`,
         );
       }
@@ -310,7 +354,7 @@ export class LinearConnector implements Connector, ConnectorModule {
     const organization = objectValue(viewer?.organization);
     const organizationId = stringValue(organization?.id);
     if (viewer?.app !== true || !organizationId) {
-      throw new Error(
+      throw new ProviderRejectedError(
         "Linear did not return an app actor and organization for these credentials",
       );
     }

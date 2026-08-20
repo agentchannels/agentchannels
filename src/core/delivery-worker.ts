@@ -2,6 +2,7 @@ import type { Connector } from "../connectors/connector.js";
 import type { ConnectorType, DeliveryMessage } from "./types.js";
 import type { Persistence } from "../persistence/store.js";
 import type { BindingCredentialService } from "../security/identity.js";
+import { redactSensitiveText } from "../security/redaction.js";
 
 export type DeliveryWorkerOptions = {
   store: Persistence;
@@ -51,7 +52,9 @@ export class DeliveryWorker {
         await connector.deliver(message, credentials);
         this.options.store.markDeliveryDelivered(delivery.id, this.now());
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = redactSensitiveText(
+          error instanceof Error ? error.message : String(error),
+        );
         if (delivery.attempts >= this.maxAttempts) {
           this.options.store.markDeliveryFailed(
             delivery.id,

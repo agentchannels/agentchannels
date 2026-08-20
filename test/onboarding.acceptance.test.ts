@@ -45,6 +45,7 @@ class MemoryCredentials implements CredentialStore {
 class TestConnector implements ConnectorModule {
   readonly label: string;
   readonly credentialFields: readonly { key: string; label: string }[];
+  operatorUsers: RemoteUser[] = [];
   readonly verifyCredentials = vi.fn(
     async (
       credentials: Readonly<Record<string, string>>,
@@ -91,6 +92,7 @@ class TestConnector implements ConnectorModule {
     query: string,
     _credentials: Readonly<Record<string, string>>,
   ): Promise<RemoteUser[]> {
+    if (this.operatorUsers.length > 0) return this.operatorUsers;
     return [
       {
         id: `${this.type}-operator`,
@@ -113,6 +115,36 @@ function scriptedPrompt(values: string[]): PromptIO & { labels: string[] } {
     labels,
     input: next,
     secret: next,
+    async select<Value>(label: string, choices: readonly { value: Value }[]) {
+      labels.push(label);
+      const selected = values.shift();
+      if (selected === undefined)
+        throw new Error(`Unexpected prompt: ${label}`);
+      const choice = choices.find(({ value }) => {
+        if (String(value) === selected) return true;
+        return (
+          typeof value === "object" &&
+          value !== null &&
+          "id" in value &&
+          String((value as { id: unknown }).id) === selected
+        );
+      });
+      if (choice === undefined) throw new Error(`Invalid choice: ${selected}`);
+      return choice.value;
+    },
+    async multiSelect<Value>(
+      label: string,
+      choices: readonly { value: Value }[],
+    ) {
+      labels.push(label);
+      const selected = values.shift();
+      if (selected === undefined)
+        throw new Error(`Unexpected prompt: ${label}`);
+      const wanted = new Set(selected.split(",").map((value) => value.trim()));
+      return choices
+        .filter(({ value }) => wanted.has(String(value)))
+        .map(({ value }) => value);
+    },
     async confirm(label) {
       return (await next(label)) === "yes";
     },
@@ -194,6 +226,17 @@ afterEach(() => {
 });
 
 describe("resumable first-run onboarding", () => {
+  it("keeps an interactive Skip local-only without Relay mutation", async () => {
+    const prompt = scriptedPrompt(["Local", "__local_only__"]);
+    const f = fixture({ interactive: true, prompt });
+    const result = await runInitWizard(f.dependencies, { cwd: f.directory });
+    expect(result).toMatchObject({ status: "ready", nextSteps: [] });
+    expect(f.store.listAgents()).toHaveLength(1);
+    expect(f.store.listAllBindingSetups()).toEqual([]);
+    expect(f.relay.ensureHosted).not.toHaveBeenCalled();
+    f.store.close();
+  });
+
   it("creates one Agent, durable independent setups, and browserless artifacts without prompting in machine mode", async () => {
     const f = fixture();
     const first = await runInitWizard(f.dependencies, {
@@ -259,6 +302,55 @@ describe("resumable first-run onboarding", () => {
     f.store.close();
   });
 
+  it("uses the injected select abstraction for multiple Operators", async () => {
+    const f = fixture();
+    f.slack.operatorUsers = [
+      { id: "slack-first", name: "First", email: "first@example.com" },
+      { id: "slack-second", name: "Second", email: "second@example.com" },
+    ];
+    await runInitWizard(f.dependencies, {
+      cwd: f.directory,
+      connectorTypes: ["slack"],
+    });
+    const prompt = scriptedPrompt([
+      "",
+      "bot-token",
+      "signing-secret",
+      "snow",
+      "slack-second",
+    ]);
+    const result = await runInitWizard(
+      { ...f.dependencies, prompt, interactive: true },
+      { cwd: f.directory },
+    );
+    expect(result.status).toBe("ready");
+    expect(f.store.listAllBindings()).toMatchObject([
+      { connector: "slack", operatorUserId: "slack-second" },
+    ]);
+    expect(prompt.labels).toContain("Operator");
+    f.store.close();
+  });
+
+  it("removes verified credentials when Binding activation fails", async () => {
+    const f = fixture();
+    await runInitWizard(f.dependencies, {
+      cwd: f.directory,
+      connectorTypes: ["slack"],
+    });
+    vi.spyOn(f.store, "completeBindingSetup").mockImplementation(() => {
+      throw new Error("Binding activation failed");
+    });
+    const prompt = scriptedPrompt(["", "bot-token", "signing-secret", "snow"]);
+    const result = await runInitWizard(
+      { ...f.dependencies, prompt, interactive: true },
+      { cwd: f.directory },
+    );
+    expect(result.status).toBe("degraded");
+    expect(f.store.listAllBindings()).toHaveLength(0);
+    expect([...f.credentialStore.values.keys()]).toHaveLength(0);
+    f.store.close();
+  });
+
   it("records the browser boundary before cancellation and resumes the same setup", async () => {
     const cancellingPrompt: PromptIO = {
       async input() {
@@ -268,6 +360,12 @@ describe("resumable first-run onboarding", () => {
       },
       async secret() {
         throw new Error("secret prompt must not be reached");
+      },
+      async select() {
+        throw new Error("select prompt must not be reached");
+      },
+      async multiSelect() {
+        throw new Error("multiSelect prompt must not be reached");
       },
       async confirm() {
         return false;
