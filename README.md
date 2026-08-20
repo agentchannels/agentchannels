@@ -84,7 +84,7 @@ agentchannels daemon
 - `agentchannels users search <query>` finds stable provider user IDs.
 - `agentchannels status` shows global Agent, Binding, setup, and Session state.
 - `agentchannels sessions retire` safely retires a retained Session.
-- `agentchannels daemon` runs in the foreground; `daemon install|start|stop|status|uninstall`
+- `agentchannels daemon` runs in the foreground; `daemon install|start|restart|stop|status|uninstall`
   manages a macOS LaunchAgent or Linux systemd user service.
 
 Add `--json` to supported commands for machine-readable output. Use `--agent ag_...` when the current directory does not identify one Agent.
