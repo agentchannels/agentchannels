@@ -78,6 +78,12 @@ const noPrompt: PromptIO = {
   async confirm(label) {
     throw new Error(`unexpected confirmation: ${label}`);
   },
+  async select(label) {
+    throw new Error(`unexpected selection: ${label}`);
+  },
+  async multiSelect(label) {
+    throw new Error(`unexpected multi-selection: ${label}`);
+  },
 };
 
 const artifacts: ExternalActions = {

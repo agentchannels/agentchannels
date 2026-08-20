@@ -8,6 +8,7 @@ import type {
   RuntimeInteractionRequest,
   RuntimeTurn,
 } from "../runtime/runtime.js";
+import { redactSensitiveText } from "../security/redaction.js";
 import { WorktreeManager } from "./worktrees.js";
 
 export type SessionCoordinatorOptions = {
@@ -71,6 +72,7 @@ export class SessionCoordinator {
         command.remoteConversationId,
       );
       if (existing === undefined) {
+        if (command.allowNewSession === false) return "denied";
         try {
           await this.createAndSchedule(
             bindingId,
@@ -82,7 +84,7 @@ export class SessionCoordinator {
             connector: binding.connector,
             remoteConversationId: command.remoteConversationId,
             kind: "error",
-            body: `Could not start this task. ${error instanceof Error ? error.message : String(error)}`,
+            body: `Could not start this task. ${redactSensitiveText(error instanceof Error ? error.message : String(error))}`,
             metadata: { bindingId },
           });
           throw error;

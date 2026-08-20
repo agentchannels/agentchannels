@@ -35,7 +35,51 @@ const resultMessage = (result: string): SDKMessage =>
     permission_denials: [],
   }) as unknown as SDKMessage;
 
+const assistantMessage = (text: string): SDKMessage =>
+  ({
+    type: "assistant",
+    session_id: "runtime-1",
+    message: { content: [{ type: "text", text }] },
+  }) as unknown as SDKMessage;
+
 describe("ClaudeRuntime", () => {
+  it("does not emit the same assistant text as both progress and final", async () => {
+    const sdkQuery = vi.fn(() =>
+      fakeQuery([assistantMessage("done"), resultMessage("done")]),
+    );
+    const turn = new ClaudeRuntime(sdkQuery as never).start({
+      cwd: "/repo/worktree",
+      additionalDirectories: [],
+      prompt: "hello",
+      requestInteraction: vi.fn(),
+    });
+    const events: unknown[] = [];
+    for await (const event of turn.events) events.push(event);
+    expect(events).toEqual([
+      { type: "session_started", runtimeSessionId: "runtime-1" },
+      { type: "final", body: "done" },
+    ]);
+  });
+
+  it("preserves distinct progress before the final response", async () => {
+    const sdkQuery = vi.fn(() =>
+      fakeQuery([assistantMessage("working"), resultMessage("done")]),
+    );
+    const turn = new ClaudeRuntime(sdkQuery as never).start({
+      cwd: "/repo/worktree",
+      additionalDirectories: [],
+      prompt: "hello",
+      requestInteraction: vi.fn(),
+    });
+    const events: unknown[] = [];
+    for await (const event of turn.events) events.push(event);
+    expect(events).toEqual([
+      { type: "session_started", runtimeSessionId: "runtime-1" },
+      { type: "progress", body: "working" },
+      { type: "final", body: "done" },
+    ]);
+  });
+
   it("starts with exact cwd/additional directories and maps SDK output", async () => {
     let captured: Options | undefined;
     const sdkQuery = vi.fn(

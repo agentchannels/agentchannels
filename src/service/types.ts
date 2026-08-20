@@ -1,14 +1,16 @@
 export type ServiceCommand = {
+  /** Must resolve to an installation-stable executable, not a checkout-local shim. */
   executable: string;
   args: string[];
   environment?: Record<string, string>;
 };
 
+/** The command persisted in launchd/systemd definitions across process updates. */
 export type StableServiceCommand = ServiceCommand;
 
 export type ServiceDefinition = {
   version: string;
-  command: ServiceCommand;
+  command: StableServiceCommand;
 };
 
 export type ServiceStatus = {
@@ -20,7 +22,20 @@ export type ServiceStatus = {
   definitionPath: string;
   command?: ServiceCommand;
   version?: string;
-  nextAction: string;
+};
+
+/** The externally meaningful result of a service lifecycle mutation. */
+export type ServiceOperation =
+  | "installed"
+  | "started"
+  | "restarted"
+  | "unchanged"
+  | "stopped"
+  | "uninstalled"
+  | "unsupported";
+
+export type ServiceOperationResult = ServiceStatus & {
+  operation: ServiceOperation;
 };
 
 export type ServiceFileSystem = {
@@ -50,13 +65,16 @@ export type ServiceManagerOptions = {
   fileSystem?: ServiceFileSystem;
   runCommand?: ServiceCommandRunner;
   registry?: ServicePlatformRegistry;
+  serviceIdentifier?: string;
 };
 
 export type ServicePlatformAdapter = {
   readonly platform: NodeJS.Platform | string;
   readonly definitionPath: string;
   install(definition: ServiceDefinition): Promise<void>;
+  reconcile(definition: ServiceDefinition): Promise<ServiceOperationResult>;
   start(): Promise<void>;
+  restart(definition?: ServiceDefinition): Promise<void>;
   stop(): Promise<void>;
   uninstall(): Promise<void>;
   status(definition?: ServiceDefinition): Promise<ServiceStatus>;
@@ -66,7 +84,11 @@ export type ServicePlatformFactory = (
   options: Required<
     Pick<
       ServiceManagerOptions,
-      "homeDirectory" | "fileSystem" | "runCommand" | "uid"
+      | "homeDirectory"
+      | "fileSystem"
+      | "runCommand"
+      | "uid"
+      | "serviceIdentifier"
     >
   > & { platform: NodeJS.Platform | string },
 ) => ServicePlatformAdapter;

@@ -6,8 +6,10 @@ import {
   serviceName,
   xmlEscape,
 } from "./format.js";
+import { assertExpectedServiceExit } from "./guards.js";
 import type {
   ServiceDefinition,
+  ServiceOperationResult,
   ServicePlatformFactory,
   ServiceStatus,
 } from "./types.js";
@@ -15,53 +17,124 @@ import type {
 const MACOS_PLATFORM = "darwin" as NodeJS.Platform;
 
 export const macosServicePlatform: ServicePlatformFactory = (options) => {
-  const label = serviceName();
+  const label = options.serviceIdentifier;
   const directory = join(options.homeDirectory, "Library", "LaunchAgents");
   const definitionPath = join(directory, `${label}.plist`);
   const target = `gui/${String(options.uid)}/${label}`;
-  return {
+  const readStatus = (definition?: ServiceDefinition): Promise<ServiceStatus> =>
+    adapter.status(definition);
+  const result = async (
+    definition: ServiceDefinition,
+    operation: ServiceOperationResult["operation"],
+  ): Promise<ServiceOperationResult> => ({
+    ...(await readStatus(definition)),
+    operation,
+  });
+  const installDefinition = async (definition: ServiceDefinition) => {
+    await options.fileSystem.mkdir(directory);
+    const logs = logDirectory(definition);
+    if (logs !== undefined) await options.fileSystem.mkdir(logs);
+    await options.fileSystem.write(
+      definitionPath,
+      renderLaunchAgent(definition, label),
+    );
+    const bootoutArgs = ["bootout", target];
+    const bootoutResult = await options.runCommand("launchctl", bootoutArgs, {
+      allowFailure: true,
+    });
+    assertExpectedServiceExit("launchctl", bootoutArgs, bootoutResult, [0, 3]);
+    await options.runCommand("launchctl", [
+      "bootstrap",
+      `gui/${String(options.uid)}`,
+      definitionPath,
+    ]);
+  };
+  const adapter: ReturnType<ServicePlatformFactory> = {
     platform: MACOS_PLATFORM,
     definitionPath,
     async install(definition) {
-      await options.fileSystem.mkdir(directory);
-      const logs = logDirectory(definition);
-      if (logs !== undefined) await options.fileSystem.mkdir(logs);
-      await options.fileSystem.write(
-        definitionPath,
-        renderLaunchAgent(definition),
-      );
-      await options.runCommand("launchctl", ["bootout", target], {
-        allowFailure: true,
-      });
-      await options.runCommand("launchctl", [
-        "bootstrap",
-        `gui/${String(options.uid)}`,
-        definitionPath,
-      ]);
+      await installDefinition(definition);
+    },
+    async reconcile(definition) {
+      const current = await readStatus(definition);
+      if (!current.installed) {
+        await installDefinition(definition);
+        return result(definition, "installed");
+      }
+      if (!current.running) {
+        if (!current.definitionMatches) {
+          await installDefinition(definition);
+          return result(definition, "started");
+        }
+        await adapter.start();
+        return result(definition, "started");
+      }
+      if (!current.definitionMatches) {
+        await installDefinition(definition);
+        return result(definition, "restarted");
+      }
+      return { ...current, operation: "unchanged" };
     },
     async start() {
+      const printArgs = ["print", target];
+      const current = await options.runCommand("launchctl", printArgs, {
+        allowFailure: true,
+      });
+      assertExpectedServiceExit("launchctl", printArgs, current, [0, 113]);
+      if (current.exitCode !== 0) {
+        await options.runCommand("launchctl", [
+          "bootstrap",
+          `gui/${String(options.uid)}`,
+          definitionPath,
+        ]);
+        return;
+      }
+      if (!/(?:^|\n)\s*state\s*=\s*running\s*(?:\n|$)/i.test(current.stdout))
+        await options.runCommand("launchctl", ["kickstart", target]);
+    },
+    async restart(definition) {
+      if (definition !== undefined) {
+        const current = await readStatus(definition);
+        if (!current.running) {
+          if (!current.definitionMatches) await installDefinition(definition);
+          else await adapter.start();
+          return;
+        }
+        if (!current.definitionMatches) {
+          await installDefinition(definition);
+          return;
+        }
+      }
       await options.runCommand("launchctl", ["kickstart", "-k", target]);
     },
     async stop() {
-      await options.runCommand("launchctl", ["kill", "SIGTERM", target], {
+      const args = ["kill", "SIGTERM", target];
+      const result = await options.runCommand("launchctl", args, {
         allowFailure: true,
       });
+      assertExpectedServiceExit("launchctl", args, result, [0, 113]);
     },
     async uninstall() {
-      await options.runCommand("launchctl", ["bootout", target], {
+      const args = ["bootout", target];
+      const result = await options.runCommand("launchctl", args, {
         allowFailure: true,
       });
+      assertExpectedServiceExit("launchctl", args, result, [0, 3]);
       await options.fileSystem.remove(definitionPath);
     },
     async status(definition) {
       const content = await options.fileSystem.read(definitionPath);
-      const running =
-        content !== null &&
-        (
-          await options.runCommand("launchctl", ["print", target], {
-            allowFailure: true,
-          })
-        ).exitCode === 0;
+      let running = false;
+      if (content !== null) {
+        const args = ["print", target];
+        const result = await options.runCommand("launchctl", args, {
+          allowFailure: true,
+        });
+        assertExpectedServiceExit("launchctl", args, result, [0, 113]);
+        running =
+          result.exitCode === 0 &&
+          /(?:^|\n)\s*state\s*=\s*running\s*(?:\n|$)/i.test(result.stdout);
+      }
       return {
         platform: MACOS_PLATFORM,
         supported: true,
@@ -70,23 +143,21 @@ export const macosServicePlatform: ServicePlatformFactory = (options) => {
         definitionMatches:
           content !== null &&
           (definition === undefined ||
-            content === renderLaunchAgent(definition)),
+            content === renderLaunchAgent(definition, label)),
         definitionPath,
         ...(definition === undefined
           ? {}
           : { command: definition.command, version: definition.version }),
-        nextAction:
-          content === null
-            ? "Run agentchannels daemon install"
-            : running
-              ? "No action required"
-              : "Run agentchannels daemon start",
       } satisfies ServiceStatus;
     },
   };
+  return adapter;
 };
 
-export function renderLaunchAgent(definition: ServiceDefinition): string {
+export function renderLaunchAgent(
+  definition: ServiceDefinition,
+  label = serviceName(),
+): string {
   const environment = commandEnvironment(
     definition.command,
     definition.version,
@@ -110,7 +181,7 @@ export function renderLaunchAgent(definition: ServiceDefinition): string {
     '<plist version="1.0">',
     "<dict>",
     "  <key>Label</key>",
-    `  <string>${xmlEscape(serviceName())}</string>`,
+    `  <string>${xmlEscape(label)}</string>`,
     "  <key>ProgramArguments</key>",
     "  <array>",
     argumentsXml,

@@ -5,7 +5,6 @@ import {
   type PermissionUpdate,
   type PermissionResult,
   type Query,
-  type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { InteractionKind } from "../core/types.js";
@@ -366,6 +365,7 @@ export class ClaudeRuntime implements Runtime {
     if (!activeQuery) return;
 
     let announcedSession = false;
+    let pendingAssistantText: string[] = [];
     for await (const message of activeQuery) {
       if (
         !announcedSession &&
@@ -378,24 +378,30 @@ export class ClaudeRuntime implements Runtime {
           runtimeSessionId: message.session_id,
         };
       }
-      yield* this.mapMessage(message);
-      if (message.type === "result") return;
+      if (message.type === "assistant") {
+        for (const body of pendingAssistantText)
+          yield { type: "progress", body };
+        pendingAssistantText = textFromContent(message.message.content);
+        if (message.error) yield { type: "error", message: message.error };
+        continue;
+      }
+      if (message.type === "result") {
+        if (message.subtype === "success") {
+          for (const body of pendingAssistantText) {
+            if (body !== message.result) yield { type: "progress", body };
+          }
+          yield { type: "final", body: message.result };
+        } else {
+          yield {
+            type: "error",
+            message: message.errors.join("; ") || message.subtype,
+          };
+        }
+        return;
+      }
+      for (const body of pendingAssistantText) yield { type: "progress", body };
+      pendingAssistantText = [];
     }
-  }
-
-  private *mapMessage(message: SDKMessage): Iterable<RuntimeEvent> {
-    if (message.type === "assistant") {
-      if (message.error) yield { type: "error", message: message.error };
-      for (const body of textFromContent(message.message.content))
-        yield { type: "progress", body };
-    } else if (message.type === "result") {
-      if (message.subtype === "success")
-        yield { type: "final", body: message.result };
-      else
-        yield {
-          type: "error",
-          message: message.errors.join("; ") || message.subtype,
-        };
-    }
+    for (const body of pendingAssistantText) yield { type: "progress", body };
   }
 }

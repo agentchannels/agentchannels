@@ -4,10 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { SlackConnector } from "../src/connectors/slack.js";
 import { LinearConnector } from "../src/connectors/linear.js";
-import {
-  createLinearOnboarding,
-  createSlackOnboarding,
-} from "../src/connectors/onboarding.js";
+import { createOnboardingConfiguration } from "../src/connectors/onboarding.js";
 import type { InboundRequest } from "../src/core/types.js";
 
 function request(
@@ -70,6 +67,33 @@ describe("Slack connector", () => {
         deliveryId: "Ev1",
         remoteConversationId: "1.2",
         text: "do it",
+        allowNewSession: true,
+      },
+    });
+
+    const unrelatedThread = connector.verifyAndParse(
+      slackRequest(
+        JSON.stringify({
+          event_id: "Ev-thread",
+          event: {
+            type: "message",
+            user: "U1",
+            channel: "C1",
+            thread_ts: "1.2",
+            ts: "1.3",
+            text: "ls",
+            channel_type: "channel",
+          },
+        }),
+      ),
+      { signingSecret: "slack-secret" },
+    );
+    expect(unrelatedThread).toMatchObject({
+      ok: true,
+      command: {
+        type: "message",
+        remoteConversationId: "C1:1.2",
+        allowNewSession: false,
       },
     });
 
@@ -230,25 +254,27 @@ describe("Linear connector", () => {
 
 describe("onboarding", () => {
   it("returns manifests and explicit admin actions without creating apps", () => {
-    const slack = createSlackOnboarding({
+    const slackArtifact = new SlackConnector().createOnboardingArtifact({
       agentName: "Runbear",
-      relayWebhookUrl: "https://relay.example/hooks",
+      relayOrigin: "https://relay.example",
+      webhookUrl: "https://relay.example/hooks",
     });
-    if (!("settings" in slack.manifest))
-      throw new Error("expected Slack manifest");
-    expect(slack.manifest.settings.socket_mode_enabled).toBe(false);
+    const slack = createOnboardingConfiguration(slackArtifact);
+    const slackManifest = JSON.parse(slackArtifact.content) as {
+      settings: { socket_mode_enabled: boolean };
+    };
+    expect(slackManifest.settings.socket_mode_enabled).toBe(false);
     expect(slack.actionRequired.status).toBe("action_required");
-    const linear = createLinearOnboarding({
+    const linearArtifact = new LinearConnector().createOnboardingArtifact({
       agentName: "Runbear",
-      clientUri: "https://agent.example",
-      redirectUri: "https://agent.example/callback",
-      relayWebhookUrl: "https://relay.example/hooks",
+      relayOrigin: "https://relay.example",
+      webhookUrl: "https://relay.example/hooks",
     });
-    if (!("webhook" in linear.manifest))
-      throw new Error("expected Linear manifest");
-    expect(linear.manifest.webhook.resourceTypes).toEqual([
-      "AgentSessionEvent",
-    ]);
+    const linear = createOnboardingConfiguration(linearArtifact);
+    const linearManifest = JSON.parse(linearArtifact.content) as {
+      webhook: { resourceTypes: string[] };
+    };
+    expect(linearManifest.webhook.resourceTypes).toEqual(["AgentSessionEvent"]);
     expect(linear.actionRequired.url).toContain("manifest=");
   });
 });

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { lstat, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -33,6 +33,49 @@ export type WorktreeManagerOptions = {
   worktreeRoot?: string;
   git?: GitClient;
 };
+
+export class WorktreeCreationError extends Error {
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "WorktreeCreationError";
+  }
+}
+
+async function pathExists(value: string): Promise<boolean> {
+  try {
+    await lstat(value);
+    return true;
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    )
+      return false;
+    throw error;
+  }
+}
+
+function worktreeFailureMessage(): string {
+  return "The repository could not be checked out with its configured Git tools. Ask the Agent operator to inspect the local toolchain.";
+}
+
+async function isRegisteredWorktree(
+  git: GitClient,
+  repositoryRoot: string,
+  worktreePath: string,
+): Promise<boolean> {
+  const listing = await git.run(
+    ["worktree", "list", "--porcelain"],
+    repositoryRoot,
+  );
+  return listing
+    .split("\n")
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => path.resolve(line.slice("worktree ".length).trim()))
+    .includes(worktreePath);
+}
 
 /** Creates and retires only clean worktrees owned by this manager. */
 export class WorktreeManager {
@@ -76,11 +119,38 @@ export class WorktreeManager {
     if (!worktreePath.startsWith(`${worktreeRoot}${path.sep}`)) {
       throw new Error("Worktree path escapes the owned worktree directory");
     }
+    if (await pathExists(worktreePath))
+      throw new WorktreeCreationError(
+        "The Session worktree path already exists. Ask the Agent operator to inspect stale AgentChannels worktrees.",
+        undefined,
+      );
 
-    await this.git.run(
-      ["worktree", "add", "--detach", worktreePath, baseCommit],
-      repositoryRoot,
-    );
+    try {
+      await this.git.run(
+        ["worktree", "add", "--detach", worktreePath, baseCommit],
+        repositoryRoot,
+      );
+    } catch (error) {
+      let registered: boolean | undefined;
+      try {
+        registered = await isRegisteredWorktree(
+          this.git,
+          repositoryRoot,
+          worktreePath,
+        );
+      } catch {}
+      if (registered === true) {
+        try {
+          await this.git.run(
+            ["worktree", "remove", "--force", worktreePath],
+            repositoryRoot,
+          );
+        } catch {}
+      } else if (registered === false) {
+        await rm(worktreePath, { recursive: true, force: true });
+      }
+      throw new WorktreeCreationError(worktreeFailureMessage(), error);
+    }
     this.ownedPaths.add(worktreePath);
     const relativeCwd = path.relative(repositoryRoot, this.repositoryPath);
     return {

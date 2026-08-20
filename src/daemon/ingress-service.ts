@@ -2,6 +2,7 @@ import type { Connector } from "../connectors/connector.js";
 import type { ConnectorType, InboundRequest } from "../core/types.js";
 import type { Persistence } from "../persistence/store.js";
 import type { BindingCredentialService } from "../security/identity.js";
+import { redactErrorDiagnostic } from "../security/redaction.js";
 import type { SessionCoordinator } from "../core/session-coordinator.js";
 import type { RelayWebhook, RelayWebhookResponse } from "./relay-client.js";
 
@@ -60,7 +61,7 @@ export class IngressService {
             this.options.onError?.({
               bindingId: binding.id,
               requestId: message.requestId,
-              error: error instanceof Error ? error.message : String(error),
+              error: redactErrorDiagnostic(error),
             });
           });
       }
@@ -69,7 +70,7 @@ export class IngressService {
       this.options.onError?.({
         bindingId: binding.id,
         requestId: message.requestId,
-        error: error instanceof Error ? error.message : String(error),
+        error: redactErrorDiagnostic(error),
       });
       return { status: 500, body: "Local verification failed" };
     }

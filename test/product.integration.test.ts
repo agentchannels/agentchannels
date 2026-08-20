@@ -259,6 +259,22 @@ function latestInteraction(store: Persistence, kind: InteractionKind) {
 }
 
 describe("AgentChannels product flow", () => {
+  it("does not start a Session from an unrelated Slack thread follow-up", async () => {
+    const { store, coordinator, runtime, bindingId } = createFixture();
+    await expect(
+      coordinator.accept(bindingId, {
+        type: "message",
+        deliveryId: "evt-unrelated-thread",
+        remoteConversationId: "unrelated-thread",
+        remoteUserId: "alice",
+        text: "ls",
+        allowNewSession: false,
+      }),
+    ).resolves.toBe("denied");
+    expect(store.listSessions()).toEqual([]);
+    expect(runtime.calls).toEqual([]);
+  });
+
   it("keeps the complete interaction flow local, isolated, authorized, and resumable", async () => {
     const {
       repository,

@@ -24,6 +24,20 @@ export type VerificationResult =
 
 export type ConnectorCredentials = Readonly<Record<string, string>>;
 
+export class MalformedConnectorCredentialsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MalformedConnectorCredentialsError";
+  }
+}
+
+export class ProviderRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderRejectedError";
+  }
+}
+
 export type Connector = {
   readonly type: ConnectorType;
   verifyAndParse(
@@ -44,6 +58,10 @@ export type Connector = {
 };
 
 export type CredentialField = Readonly<{ key: string; label: string }>;
+
+export type ConnectorAvailability =
+  | Readonly<{ available: true }>
+  | Readonly<{ available: false; reason: string }>;
 
 export type OnboardingContext = Readonly<{
   agentName: string;
@@ -78,6 +96,10 @@ export type PendingWebhookResponse = Readonly<{
 
 export type ConnectorModule = Connector & {
   readonly label: string;
+  /** Optional provider-specific availability check used before onboarding begins. */
+  readonly availability?: () =>
+    | ConnectorAvailability
+    | Promise<ConnectorAvailability>;
   readonly credentialFields: readonly CredentialField[];
   createOnboardingArtifact(context: OnboardingContext): OnboardingArtifact;
   verifyCredentials(

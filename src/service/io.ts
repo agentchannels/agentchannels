@@ -8,6 +8,7 @@ import type {
   ServiceCommandRunner,
   ServiceFileSystem,
 } from "./types.js";
+import { ServiceCommandError } from "./guards.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -53,7 +54,7 @@ export const nodeCommandRunner: ServiceCommandRunner = async (
       message?: unknown;
     };
     const exitCode = typeof failure.code === "number" ? failure.code : 1;
-    if (options?.allowFailure === true) {
+    if (options?.allowFailure === true && typeof failure.code === "number") {
       return {
         exitCode,
         stdout: typeof failure.stdout === "string" ? failure.stdout : "",
@@ -65,10 +66,17 @@ export const nodeCommandRunner: ServiceCommandRunner = async (
               : "",
       };
     }
-    throw new Error(
-      typeof failure.message === "string"
-        ? failure.message
-        : `Service command failed with exit code ${String(exitCode)}`,
+    throw new ServiceCommandError(
+      executable,
+      args,
+      exitCode,
+      typeof failure.stdout === "string" ? failure.stdout : "",
+      typeof failure.stderr === "string"
+        ? failure.stderr
+        : typeof failure.message === "string"
+          ? failure.message
+          : "",
+      error,
     );
   }
 };
