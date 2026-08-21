@@ -4,16 +4,18 @@ This document records the provider contracts that AgentChannels relies on and
 the checks that require real provider or operating-system state. Automated tests
 use injected HTTP, credential-store, relay, prompt, and service-manager doubles;
 they do not mutate a real Slack or Linear workspace, keychain, launchd, systemd,
-or `~/.agentchannels`.
+or `~/.agentchannels`. Credential-store isolation is structural rather than
+conventional: the keyring service name is derived from the product home, so any
+run under `--home` or `AGENTCHANNELS_HOME` addresses its own namespace and cannot
+read or delete the operator's installation identity.
 
 ## Source and package smoke
 
 The source-checkout path is verified from a missing `dist` directory: `pnpm
-start -- --help` builds once, keeps build-tool chatter out of stdout, and runs
-the same `dist/cli.js` entrypoint used by the package. Concurrent starts share a
-short-lived build lock; a lock whose recorded process no longer exists is
-removed before retrying, and the lock is removed after both successful and
-failed builds.
+start -- --help` runs `src/cli.ts` through Node's built-in type stripping, so
+there is no build step, no build lock, and no build-tool output on stdout. This
+requires Node.js 24; the packaged CLI runs compiled JavaScript and is smoke-tested
+on both Node.js 22 and 24, the declared `engines` range.
 
 The release path packs the built `dist` tree and `scripts/restore-database.mjs`
 only, installs that tarball into a temporary pnpm project, and runs
