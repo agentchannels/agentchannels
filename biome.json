@@ -52,5 +52,77 @@
   },
   "assist": {
     "enabled": false
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/model.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["./*", "../*"],
+                    "message": "model.ts is the leaf of the dependency graph and must not import from the tree."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/connectors/**", "src/runtimes/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**/engine/**",
+                      "**/store/**",
+                      "**/cli/**",
+                      "**/daemon.ts"
+                    ],
+                    "message": "An extension point must not depend on the engine, the store, or the CLI. Depend on the contract instead."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/engine/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**/connectors/slack.ts",
+                      "**/connectors/linear.ts",
+                      "**/runtimes/claude.ts",
+                      "**/cli/**"
+                    ],
+                    "message": "The engine must not name a concrete connector or runtime. Use the contract."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

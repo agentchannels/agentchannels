@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { Persistence } from "../src/persistence/index.js";
+import { Persistence } from "../src/store/store.ts";
 
 const stores: Persistence[] = [];
 afterEach(() => {
@@ -58,22 +58,19 @@ describe("persistence schema and access", () => {
     expect(store.isAuthorized(bindingId, "other")).toBe(false);
   });
 
-  it("resolves an exact CWD and does not guess from a parent directory", () => {
+  it("matches a CWD inside an Agent and does not guess from a parent", () => {
     const { store } = fixture();
-    expect(store.resolveAgentByCwd("/workspace/project")?.id).toBe("ag_test");
-    expect(
-      store.resolveAgentByCwd("/workspace/project/packages/core")?.id,
-    ).toBe("ag_test");
-    expect(store.resolveAgentByCwd("/workspace")).toBeUndefined();
-    expect(store.resolveAgentByCwd("/workspace/project-other")).toBeUndefined();
+    const ids = (cwd: string) => store.findAgentsByCwd(cwd).map((a) => a.id);
+    expect(ids("/workspace/project")).toEqual(["ag_test"]);
+    expect(ids("/workspace/project/packages/core")).toEqual(["ag_test"]);
+    expect(ids("/workspace")).toEqual([]);
+    expect(ids("/workspace/project-other")).toEqual([]);
     store.createAgent({
       id: "ag_second",
       name: "Second",
       cwd: "/workspace/project",
     });
-    expect(() => store.resolveAgentByCwd("/workspace/project")).toThrow(
-      /More than one Agent/,
-    );
+    expect(ids("/workspace/project").sort()).toEqual(["ag_second", "ag_test"]);
   });
 });
 
@@ -219,7 +216,6 @@ describe("delivery and ingress durability", () => {
     });
     expect(store.recordIngress(bindingId, "evt-1")).toBe(true);
     expect(store.recordIngress(bindingId, "evt-1")).toBe(false);
-    expect(store.hasIngress(bindingId, "evt-1")).toBe(true);
     expect(store.recordIngress(other.id, "evt-1")).toBe(true);
   });
 });

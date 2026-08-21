@@ -5,19 +5,19 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createProgram } from "../src/cli/program.js";
-import type { PromptChoice, PromptIO } from "../src/cli/io.js";
-import { ensureProductPaths, resolveProductPaths } from "../src/core/paths.js";
-import { Persistence } from "../src/persistence/store.js";
-import { HOSTED_RELAY_ORIGIN } from "../src/relay/origin.js";
-import type { CredentialStore } from "../src/security/credentials.js";
-import { InstallationIdentityService } from "../src/security/identity.js";
-import type {
-  ServiceDefinition,
-  ServiceOperationResult,
-  ServiceStatus,
-} from "../src/service/index.js";
-import type { ServiceManager } from "../src/service/manager.js";
+import { createProgram } from "../src/cli/program.ts";
+import type { PromptChoice, PromptIO } from "../src/cli/io.ts";
+import { ensureProductPaths, resolveProductPaths } from "../src/paths.ts";
+import { Persistence } from "../src/store/store.ts";
+import { HOSTED_RELAY_ORIGIN } from "../src/relay/origin.ts";
+import type { CredentialStore } from "../src/security/keyring.ts";
+import { InstallationIdentityService } from "../src/security/identity.ts";
+import {
+  type ServiceDefinition,
+  type ServiceOperationResult,
+  type ServiceStatus,
+} from "../src/service/types.ts";
+import type { ServiceManager } from "../src/service/manager.ts";
 
 const roots: string[] = [];
 

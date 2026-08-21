@@ -1,19 +1,19 @@
 import { expect, it } from "vitest";
 
-import { DeliveryWorker } from "../src/core/delivery-worker.js";
+import { DeliveryWorker } from "../src/engine/deliveries.ts";
 import type {
   Connector,
   ConnectorCredentials,
   VerificationResult,
-} from "../src/connectors/connector.js";
+} from "../src/connectors/connector.ts";
 import type {
   DeliveryMessage,
   InboundRequest,
   RemoteUser,
-} from "../src/core/types.js";
-import { Persistence } from "../src/persistence/index.js";
-import { BindingCredentialService } from "../src/security/identity.js";
-import type { CredentialStore } from "../src/security/credentials.js";
+} from "../src/model.ts";
+import { Persistence } from "../src/store/store.ts";
+import { BindingCredentialService } from "../src/security/identity.ts";
+import type { CredentialStore } from "../src/security/keyring.ts";
 
 class MemoryCredentialStore implements CredentialStore {
   private readonly values = new Map<string, string>();

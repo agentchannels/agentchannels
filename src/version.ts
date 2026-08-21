@@ -1,3 +1,4 @@
+import { internalError } from "./errors.ts";
 import { readFileSync } from "node:fs";
 
 type PackageManifest = { version?: unknown };
@@ -7,7 +8,7 @@ const manifest = JSON.parse(
 ) as PackageManifest;
 
 if (typeof manifest.version !== "string" || manifest.version.length === 0) {
-  throw new Error("package.json does not contain a valid version");
+  throw internalError("package.json does not contain a valid version.");
 }
 
 export const PRODUCT_VERSION = manifest.version;

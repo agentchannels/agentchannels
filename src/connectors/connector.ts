@@ -2,13 +2,14 @@ import { readdirSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { AgentChannelsError, internalError } from "../errors.ts";
 import type {
   ConnectorCommand,
   ConnectorType,
   DeliveryMessage,
   InboundRequest,
   RemoteUser,
-} from "../core/types.js";
+} from "../model.ts";
 
 export type VerificationResult =
   | {
@@ -24,16 +25,20 @@ export type VerificationResult =
 
 export type ConnectorCredentials = Readonly<Record<string, string>>;
 
-export class MalformedConnectorCredentialsError extends Error {
+export class MalformedConnectorCredentialsError extends AgentChannelsError {
   constructor(message: string) {
-    super(message);
+    super("MALFORMED_CREDENTIALS", message, [
+      "Rerun agentchannels init and enter the provider-issued credentials.",
+    ]);
     this.name = "MalformedConnectorCredentialsError";
   }
 }
 
-export class ProviderRejectedError extends Error {
+export class ProviderRejectedError extends AgentChannelsError {
   constructor(message: string) {
-    super(message);
+    super("PROVIDER_REJECTED", message, [
+      "Correct the provider configuration, then rerun agentchannels init to resume.",
+    ]);
     this.name = "ProviderRejectedError";
   }
 }
@@ -58,10 +63,6 @@ export type Connector = {
 };
 
 export type CredentialField = Readonly<{ key: string; label: string }>;
-
-export type ConnectorAvailability =
-  | Readonly<{ available: true }>
-  | Readonly<{ available: false; reason: string }>;
 
 export type OnboardingContext = Readonly<{
   agentName: string;
@@ -96,10 +97,6 @@ export type PendingWebhookResponse = Readonly<{
 
 export type ConnectorModule = Connector & {
   readonly label: string;
-  /** Optional provider-specific availability check used before onboarding begins. */
-  readonly availability?: () =>
-    | ConnectorAvailability
-    | Promise<ConnectorAvailability>;
   readonly credentialFields: readonly CredentialField[];
   createOnboardingArtifact(context: OnboardingContext): OnboardingArtifact;
   verifyCredentials(
@@ -144,9 +141,10 @@ export async function loadConnectorModules(): Promise<
     if (!isConnectorModule(imported.default)) continue;
     const connector = imported.default;
     if (modules.has(connector.type))
-      throw new Error(`Duplicate connector module ${connector.type}`);
+      throw internalError(`Duplicate connector module ${connector.type}.`);
     modules.set(connector.type, connector);
   }
-  if (modules.size === 0) throw new Error("No connector modules are available");
+  if (modules.size === 0)
+    throw internalError("No connector modules are available.");
   return modules;
 }

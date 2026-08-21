@@ -10,7 +10,7 @@ import {
   select as inquirerSelect,
 } from "@inquirer/prompts";
 
-import { CliError } from "./errors.js";
+import { AgentChannelsError } from "../errors.ts";
 
 let cancellationRequested = false;
 let activePrompts = 0;
@@ -114,7 +114,7 @@ class PromptQueue {
       const cancel = (): void => {
         cancelled = true;
         queuedPromptCancellers.delete(cancel);
-        reject(new CliError("CANCELLED", "Cancelled.", []));
+        reject(new AgentChannelsError("CANCELLED", "Cancelled.", []));
       };
       queuedPromptCancellers.add(cancel);
       this.tasks.push({
@@ -198,7 +198,7 @@ async function runPromptNow<Value>(
   });
   const onAbort = (): void => {
     if (cancellationRequested)
-      rejectAbort(new CliError("CANCELLED", "Cancelled.", []));
+      rejectAbort(new AgentChannelsError("CANCELLED", "Cancelled.", []));
   };
   const onEnd = (): void => {
     if (ended) return;
@@ -206,8 +206,8 @@ async function runPromptNow<Value>(
     if (!cancellationRequested) controller.abort();
     rejectEnd(
       cancellationRequested
-        ? new CliError("CANCELLED", "Cancelled.", [])
-        : new CliError(
+        ? new AgentChannelsError("CANCELLED", "Cancelled.", [])
+        : new AgentChannelsError(
             "INPUT_EOF",
             "Required input ended before setup completed.",
             ["Rerun agentchannels init in a terminal to resume."],
@@ -247,7 +247,7 @@ async function runPromptNow<Value>(
     return await Promise.race([prompt, end, aborted]);
   } catch (error) {
     if (inputFailure !== undefined) throw inputFailure;
-    if (error instanceof CliError) {
+    if (error instanceof AgentChannelsError) {
       if (error.code === "INPUT_EOF" && eofDefault !== undefined)
         return eofDefault.value;
       throw error;
@@ -255,14 +255,16 @@ async function runPromptNow<Value>(
     if (isPromptCancellation(error)) {
       if (explicitEof) {
         if (eofDefault !== undefined) return eofDefault.value;
-        throw new CliError(
+        throw new AgentChannelsError(
           "INPUT_EOF",
           "Required input ended before setup completed.",
           ["Rerun agentchannels init in a terminal to resume."],
           { cause: error },
         );
       }
-      throw new CliError("CANCELLED", "Cancelled.", [], { cause: error });
+      throw new AgentChannelsError("CANCELLED", "Cancelled.", [], {
+        cause: error,
+      });
     }
     throw error;
   } finally {

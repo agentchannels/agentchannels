@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
 
+import { createServiceDefinition } from "../src/service/definition.ts";
 import {
   PrivilegedServiceError,
   ServiceCommandError,
   ServiceManagerError,
   UnsupportedServicePlatformError,
-  createServiceDefinition,
-  createServiceManager,
-  renderLaunchAgent,
-  renderSystemdUnit,
-} from "../src/service/index.js";
+} from "../src/service/guards.ts";
+import { renderSystemdUnit } from "../src/service/linux.ts";
+import { renderLaunchAgent } from "../src/service/macos.ts";
+import { createServiceManager } from "../src/service/manager.ts";
 import type {
   ServiceCommandResult,
   ServiceFileSystem,
   ServicePlatformRegistry,
-} from "../src/service/index.js";
+} from "../src/service/types.ts";
 
 class MemoryFileSystem implements ServiceFileSystem {
   readonly files = new Map<string, string>();
@@ -579,7 +579,9 @@ describe("service manager", () => {
     );
     expect((failure as ServiceManagerError).cause).toMatchObject({
       executable: "systemctl",
-      exitCode: 1,
+      // The service command's exit status, distinct from the CLI process exit code.
+      commandExitCode: 1,
+      exitCode: 8,
       stdout: "status output",
       stderr: "systemctl is unavailable",
     });

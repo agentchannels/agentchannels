@@ -7,8 +7,8 @@ import type {
   ServiceCommandResult,
   ServiceCommandRunner,
   ServiceFileSystem,
-} from "./types.js";
-import { ServiceCommandError } from "./guards.js";
+} from "./types.ts";
+import { ServiceCommandError } from "./guards.ts";
 
 const execFileAsync = promisify(execFile);
 

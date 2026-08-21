@@ -9,46 +9,51 @@ import { Command, Option } from "commander";
 import {
   loadConnectorModules,
   type ConnectorModule,
-} from "../connectors/connector.js";
-import type { Agent, Binding, ConnectorType } from "../core/types.js";
-import { ensureProductPaths, resolveProductPaths } from "../core/paths.js";
-import { WorktreeManager } from "../core/worktrees.js";
-import { startDaemon } from "../daemon/daemon.js";
-import { Persistence } from "../persistence/store.js";
-import { RelayManager } from "../relay/manager.js";
-import { HOSTED_RELAY_ORIGIN, parseRelayOrigin } from "../relay/origin.js";
+} from "../connectors/connector.ts";
+import type { ConnectorType } from "../model.ts";
+import { ensureProductPaths, resolveProductPaths } from "../paths.ts";
+import { SessionRetentionCleaner } from "../engine/retention.ts";
+import { WorktreeManager } from "../engine/worktrees.ts";
+import { Persistence } from "../store/store.ts";
+import { RelayManager } from "../relay/enrollment.ts";
 import {
   KeyringCredentialStore,
   type CredentialStore,
-} from "../security/credentials.js";
+} from "../security/keyring.ts";
 import {
   BindingCredentialService,
   InstallationIdentityService,
-} from "../security/identity.js";
+} from "../security/identity.ts";
+import { createServiceDefinition } from "../service/definition.ts";
 import {
-  createServiceDefinition,
   createServiceManager,
   type ServiceManager,
-} from "../service/index.js";
-import { PRODUCT_VERSION } from "../version.js";
-import { CliError } from "./errors.js";
-import { createTerminalFormatter } from "./format.js";
+} from "../service/manager.ts";
+import { PRODUCT_VERSION } from "../version.ts";
+import { AgentChannelsError, invalidState, notFound } from "../errors.ts";
+import { createTerminalFormatter } from "./format.ts";
+import { emit, ok, renderTable, type GlobalOptions } from "./output.ts";
+export type { GlobalOptions } from "./output.ts";
 import {
   systemExternalActions,
   terminalPromptIO,
   type ExternalActions,
   type PromptIO,
-} from "./io.js";
-import { installationOverview, renderOverview } from "./status.js";
-import { runInitWizard } from "./wizard.js";
+} from "./io.ts";
+import { registerAccessCommands } from "./commands/access.ts";
+import { registerDaemonCommands } from "./commands/daemon.ts";
+import { registerRelayCommands } from "./commands/relay.ts";
+import { registerUsersCommands } from "./commands/users.ts";
+import type { CommandContext } from "./context.ts";
+import {
+  readStandardInput,
+  resolveAgent,
+  resolveBinding,
+} from "./commands/shared.ts";
+import { installationOverview, renderOverview } from "./status.ts";
+import { runInitWizard } from "./wizard.ts";
 
 const execFileAsync = promisify(execFile);
-
-export type GlobalOptions = {
-  json?: boolean;
-  debug?: boolean;
-  home?: string;
-};
 
 export type ProgramDependencies = Readonly<{
   prompt?: PromptIO;
@@ -60,14 +65,6 @@ export type ProgramDependencies = Readonly<{
   serviceManager?: ServiceManager;
   serviceEntry?: string;
 }>;
-
-function output(program: Command, value: unknown, human: string): void {
-  process.stdout.write(
-    program.opts<GlobalOptions>().json
-      ? `${JSON.stringify(value, null, 2)}\n`
-      : `${human}\n`,
-  );
-}
 
 function productPaths(program: Command) {
   const global = program.opts<GlobalOptions>();
@@ -99,104 +96,13 @@ async function repositoryRoot(cwd: string): Promise<string> {
     await execFileAsync("git", ["rev-parse", "--verify", "HEAD"], { cwd });
     return realpathSync(root.stdout.trim());
   } catch (error) {
-    throw new CliError(
+    throw new AgentChannelsError(
       "MISSING_GIT_HEAD",
       "AgentChannels requires a Git repository with a current HEAD.",
       ["Create the first commit, then run agentchannels init again."],
       { cause: error },
     );
   }
-}
-
-async function readStandardInput(required = false): Promise<string> {
-  process.stdin.setEncoding("utf8");
-  let value = "";
-  for await (const chunk of process.stdin as AsyncIterable<string>)
-    value += chunk;
-  if (required && value.trim() === "")
-    throw new CliError(
-      "INPUT_EOF",
-      "Required input ended before setup completed.",
-      ["Provide the requested input and rerun the command."],
-    );
-  return value;
-}
-
-async function resolveAgent(
-  store: Persistence,
-  agentId: string | undefined,
-  interactive: boolean,
-  prompt: PromptIO,
-  cwd = process.cwd(),
-): Promise<Agent> {
-  if (agentId !== undefined) {
-    const agent = store.getAgent(agentId);
-    if (agent === undefined)
-      throw new CliError("MISSING_AGENT", `Agent ${agentId} not found.`, [
-        "Run agentchannels agent list and use an existing Agent ID.",
-      ]);
-    return agent;
-  }
-  const candidates = store.findAgentsByCwd(cwd);
-  if (candidates.length === 1 && candidates[0] !== undefined)
-    return candidates[0];
-  if (!interactive)
-    throw new CliError(
-      "MISSING_AGENT",
-      "Current directory does not uniquely identify an Agent; pass --agent ag_...",
-      ["Pass --agent with an ID from agentchannels agent list."],
-    );
-  const selectable = candidates.length > 1 ? candidates : store.listAgents();
-  if (selectable.length === 0)
-    throw new CliError("MISSING_AGENT", "No Agents are configured.", [
-      "Run agentchannels init in a Git repository.",
-    ]);
-  return prompt.select(
-    "Agent",
-    selectable.map((candidate) => ({
-      value: candidate,
-      label: candidate.name,
-      description: candidate.cwd,
-    })),
-  );
-}
-
-async function resolveBinding(
-  store: Persistence,
-  agent: Agent,
-  bindingId: string | undefined,
-  interactive: boolean,
-  prompt: PromptIO,
-): Promise<Binding> {
-  if (bindingId !== undefined) {
-    const binding = store.getBinding(bindingId);
-    if (binding === undefined || binding.agentId !== agent.id)
-      throw new CliError(
-        "USAGE_ERROR",
-        `Binding ${bindingId} does not belong to the selected Agent`,
-        ["Run agentchannels binding list and use a Binding for this Agent."],
-      );
-    return binding;
-  }
-  const bindings = store.listBindings(agent.id);
-  if (bindings.length === 1 && bindings[0] !== undefined) return bindings[0];
-  if (!interactive)
-    throw new CliError(
-      "USAGE_ERROR",
-      "Binding is ambiguous; pass --binding bd_...",
-      ["Pass --binding with an ID from agentchannels binding list."],
-    );
-  if (bindings.length === 0)
-    throw new CliError("USAGE_ERROR", "The Agent has no completed Bindings.", [
-      "Run agentchannels init to connect a channel.",
-    ]);
-  return prompt.select(
-    "Connection",
-    bindings.map((candidate) => ({
-      value: candidate,
-      label: candidate.connector,
-    })),
-  );
 }
 
 function relayManager(
@@ -266,8 +172,17 @@ function serviceToolPath(): string {
 export function createProgram(dependencies: ProgramDependencies = {}): Command {
   const prompt = dependencies.prompt ?? terminalPromptIO;
   const external = dependencies.external ?? systemExternalActions;
-  const credentialStore =
-    dependencies.credentialStore ?? new KeyringCredentialStore();
+  // Built on first use: --home is only known after the command line is parsed, and it
+  // selects the keyring namespace as well as the state directory.
+  let keyring: CredentialStore | undefined;
+  const credentialStore = (): CredentialStore => {
+    if (dependencies.credentialStore !== undefined)
+      return dependencies.credentialStore;
+    keyring ??= new KeyringCredentialStore(
+      productPaths(program).keyringService,
+    );
+    return keyring;
+  };
   const connectorModules =
     dependencies.connectors === undefined
       ? loadConnectorModules()
@@ -336,7 +251,7 @@ Run agentchannels <command> --help for command-specific examples.`,
         entry,
       )
     )
-      throw new CliError(
+      throw new AgentChannelsError(
         "SERVICE_MANAGER_FAILED",
         "Background daemon installation requires a persistent AgentChannels executable.",
         [
@@ -388,7 +303,7 @@ Run agentchannels <command> --help for command-specific examples.`,
         },
         daemonStatus,
       );
-      output(program, value, renderOverview(value, formatter()));
+      emit(program, value, renderOverview(value, formatter()));
     } finally {
       store?.close();
     }
@@ -436,7 +351,7 @@ Examples:
         backupDirectory: paths.backups,
       });
       try {
-        const identity = new InstallationIdentityService(credentialStore);
+        const identity = new InstallationIdentityService(credentialStore());
         const result = await runInitWizard(
           {
             store,
@@ -444,11 +359,11 @@ Examples:
             connectors: await connectorModules,
             relay: relayManager(
               store,
-              credentialStore,
+              credentialStore(),
               dependencies.relayFetch,
             ),
             identity,
-            credentials: new BindingCredentialService(credentialStore),
+            credentials: new BindingCredentialService(credentialStore()),
             prompt,
             external,
             interactive: interactive(),
@@ -472,7 +387,7 @@ Examples:
             ),
           },
         );
-        output(
+        emit(
           program,
           result,
           result.status === "ready"
@@ -508,9 +423,11 @@ Discover Agent IDs with: agentchannels agent list`,
   connect.action(async (connector: string, options: { agent?: string }) => {
     const store = openExistingStore(program);
     if (store === undefined)
-      throw new CliError("MISSING_AGENT", "No Agents are configured.", [
-        "Run agentchannels init in a Git repository.",
-      ]);
+      throw new AgentChannelsError(
+        "MISSING_AGENT",
+        "No Agents are configured.",
+        ["Run agentchannels init in a Git repository."],
+      );
     try {
       const agent = await resolveAgent(
         store,
@@ -519,15 +436,19 @@ Discover Agent IDs with: agentchannels agent list`,
         prompt,
       );
       const paths = productPaths(program);
-      const identity = new InstallationIdentityService(credentialStore);
+      const identity = new InstallationIdentityService(credentialStore());
       const result = await runInitWizard(
         {
           store,
           paths,
           connectors: await connectorModules,
-          relay: relayManager(store, credentialStore, dependencies.relayFetch),
+          relay: relayManager(
+            store,
+            credentialStore(),
+            dependencies.relayFetch,
+          ),
           identity,
-          credentials: new BindingCredentialService(credentialStore),
+          credentials: new BindingCredentialService(credentialStore()),
           prompt,
           external,
           interactive: interactive(),
@@ -542,7 +463,7 @@ Discover Agent IDs with: agentchannels agent list`,
         },
         { cwd: agent.cwd, connectorTypes: [connector] },
       );
-      output(
+      emit(
         program,
         result,
         result.status === "ready"
@@ -586,17 +507,18 @@ Examples:
     const store = openExistingStore(program);
     try {
       const agents = store?.listAgents() ?? [];
-      output(
+      emit(
         program,
-        {
-          status: "ready",
-          actionRequired: false,
-          nextSteps: [],
-          agents,
-        },
-        agents
-          .map((item) => `${item.name}\t${formatter().dim(item.cwd)}`)
-          .join("\n") || "No Agents",
+        ok({ agents }),
+        renderTable(
+          agents.map((item) => [
+            { header: "NAME", value: item.name },
+            { header: "ID", value: item.id },
+            { header: "REPOSITORY", value: item.cwd },
+          ]),
+          "No Agents",
+          formatter(),
+        ),
       );
     } finally {
       store?.close();
@@ -637,24 +559,19 @@ Example:
       try {
         const selected = store.getAgent(options.agent);
         if (selected === undefined)
-          throw new Error(`Agent ${options.agent} not found`);
+          throw notFound("Agent", options.agent, [
+            "Run agentchannels agent list and use an existing Agent ID.",
+          ]);
         const pendingCredentialIds = store
           .listBindingSetups(selected.id)
           .map((setup) => setup.id);
         for (const setupId of pendingCredentialIds)
-          await credentialStore.delete(`binding:${setupId}`);
+          await credentialStore().delete(`binding:${setupId}`);
         if (!store.deleteAgent(selected.id))
-          throw new Error(`Agent ${selected.id} not found`);
-        output(
-          program,
-          {
-            status: "ready",
-            actionRequired: false,
-            nextSteps: [],
-            deleted: true,
-          },
-          `Deleted Agent ${selected.name}`,
-        );
+          throw notFound("Agent", selected.id, [
+            "Run agentchannels agent list and use an existing Agent ID.",
+          ]);
+        emit(program, ok({ deleted: true }), `Deleted Agent ${selected.name}`);
       } finally {
         store.close();
       }
@@ -678,17 +595,18 @@ Examples:
       const bindings = (store?.listAllBindings() ?? []).filter(
         (item) => options.agent === undefined || item.agentId === options.agent,
       );
-      output(
+      emit(
         program,
-        {
-          status: "ready",
-          actionRequired: false,
-          nextSteps: [],
-          bindings,
-        },
-        bindings
-          .map((item) => `${item.connector}\t${formatter().dim(item.id)}`)
-          .join("\n") || "No Bindings",
+        ok({ bindings }),
+        renderTable(
+          bindings.map((item) => [
+            { header: "CHANNEL", value: item.connector },
+            { header: "ID", value: item.id },
+            { header: "WORKSPACE", value: item.externalInstallationId },
+          ]),
+          "No Bindings",
+          formatter(),
+        ),
       );
     } finally {
       store?.close();
@@ -747,8 +665,10 @@ Example:
           options.credentialsFile === undefined &&
           options.credentialsStdin !== true
         )
-          throw new Error(
-            "Pass connector credentials via --credentials-file or --credentials-stdin",
+          throw new AgentChannelsError(
+            "USAGE_ERROR",
+            "Connector credentials are required.",
+            ["Pass --credentials-file or --credentials-stdin."],
           );
         const encoded =
           options.credentialsFile === undefined
@@ -758,7 +678,7 @@ Example:
         try {
           credentials = JSON.parse(encoded) as Record<string, string>;
         } catch (error) {
-          throw new CliError(
+          throw new AgentChannelsError(
             "MALFORMED_CREDENTIALS",
             "Credentials must be valid JSON.",
             ["Correct the credential input and rerun binding complete."],
@@ -769,17 +689,23 @@ Example:
         try {
           const setup = store.getBindingSetup(options.setup);
           if (setup === undefined)
-            throw new Error(`Binding setup ${options.setup} not found`);
+            throw notFound("Binding setup", options.setup, [
+              "Run agentchannels init to create a pending setup first.",
+            ]);
           const connector = (await connectorModules).get(setup.connector);
           if (connector === undefined)
-            throw new Error(`Connector ${setup.connector} unavailable`);
+            throw invalidState(`Connector ${setup.connector} is unavailable.`, [
+              "Reinstall AgentChannels with the connector this setup uses.",
+            ]);
           const verified = await connector.verifyCredentials(credentials);
           if (verified.externalInstallationId !== options.externalInstallation)
-            throw new Error(
-              "Provider credentials belong to a different workspace",
+            throw new AgentChannelsError(
+              "PROVIDER_REJECTED",
+              "Provider credentials belong to a different workspace.",
+              ["Use credentials issued by the workspace you named."],
             );
           const credentialService = new BindingCredentialService(
-            credentialStore,
+            credentialStore(),
           );
           await credentialService.set(setup.id, verified.credentials);
           try {
@@ -787,18 +713,13 @@ Example:
               operatorUserId: options.operatorUser,
               externalInstallationId: options.externalInstallation,
             });
-            output(
+            emit(
               program,
-              {
-                status: "ready",
-                actionRequired: false,
-                nextSteps: [],
-                binding: completed,
-              },
+              ok({ binding: completed }),
               `Connected ${completed.connector}`,
             );
           } catch (error) {
-            await credentialStore.delete(`binding:${setup.id}`);
+            await credentialStore().delete(`binding:${setup.id}`);
             throw error;
           }
         } finally {
@@ -840,16 +761,13 @@ Example:
           prompt,
         );
         if (!store.deleteBinding(selected.id))
-          throw new Error(`Binding ${selected.id} not found`);
-        await credentialStore.delete(`binding:${selected.id}`);
-        output(
+          throw notFound("Binding", selected.id, [
+            "Run agentchannels binding list and use an existing Binding ID.",
+          ]);
+        await credentialStore().delete(`binding:${selected.id}`);
+        emit(
           program,
-          {
-            status: "ready",
-            actionRequired: false,
-            nextSteps: [],
-            removed: true,
-          },
+          ok({ removed: true }),
           `Removed ${selected.connector} Binding`,
         );
       } finally {
@@ -878,20 +796,25 @@ Examples:
           )
           .map((item) => item.id),
       );
+      const allBindings = store?.listAllBindings() ?? [];
+      const connectorOf = (bindingId: string): string =>
+        allBindings.find((item) => item.id === bindingId)?.connector ?? "-";
       const values = (store?.listSessions() ?? []).filter((item) =>
         allowed.has(item.bindingId),
       );
-      output(
+      emit(
         program,
-        {
-          status: "ready",
-          actionRequired: false,
-          nextSteps: [],
-          sessions: values,
-        },
-        values
-          .map((item) => `${item.status}\t${formatter().dim(item.id)}`)
-          .join("\n") || "No Sessions",
+        ok({ sessions: values }),
+        renderTable(
+          values.map((item) => [
+            { header: "STATUS", value: item.status },
+            { header: "CHANNEL", value: connectorOf(item.bindingId) },
+            { header: "UPDATED", value: item.updatedAt },
+            { header: "ID", value: item.id },
+          ]),
+          "No Sessions",
+          formatter(),
+        ),
       );
     } finally {
       store?.close();
@@ -913,6 +836,41 @@ Examples:
   agentchannels sessions list --agent ag_... --json`,
     )
     .action(listSessions);
+  sessions
+    .command("prune")
+    .description("Retire every expired Session with a clean owned worktree")
+    .addHelpText(
+      "after",
+      `
+Retention normally runs inside the background daemon. This sweeps the same
+expired Sessions on demand, which matters when the daemon has not been running.
+Dirty or unowned worktrees are preserved and reported, never removed.
+
+Examples:
+  agentchannels sessions prune
+  agentchannels sessions prune --json`,
+    )
+    .action(async () => {
+      const store = openStore(program);
+      try {
+        const cleaner = new SessionRetentionCleaner(
+          store,
+          productPaths(program).worktrees,
+        );
+        const result = await cleaner.clean();
+        const summary =
+          result.removed === 0 && result.preservedDirty === 0
+            ? "No expired Sessions to prune"
+            : `Retired ${String(result.removed)} Session(s)` +
+              (result.preservedDirty === 0
+                ? ""
+                : `; preserved ${String(result.preservedDirty)} dirty worktree(s)`);
+        emit(program, ok(result), formatter().success(summary));
+      } finally {
+        store.close();
+      }
+    });
+
   sessions
     .command("retire")
     .description("Retire a Session and remove its clean owned worktree")
@@ -938,10 +896,14 @@ Example:
         );
         const session = store.getSession(options.session);
         if (session === undefined)
-          throw new Error(`Session ${options.session} not found`);
+          throw notFound("Session", options.session, [
+            "Run agentchannels sessions list and use an existing Session ID.",
+          ]);
         const sessionBinding = store.getBinding(session.bindingId);
         if (sessionBinding?.agentId !== selectedAgent.id)
-          throw new Error("Session does not belong to the selected Agent");
+          throw invalidState("Session does not belong to the selected Agent.", [
+            "Pass --agent for the Agent that owns this Session.",
+          ]);
         const worktrees = new WorktreeManager({
           repositoryPath: selectedAgent.cwd,
           worktreeRoot: resolve(
@@ -950,585 +912,39 @@ Example:
           ),
         });
         if ((await worktrees.remove(session.worktreePath)) === "preserved")
-          throw new Error("Session worktree is dirty and was preserved");
+          throw invalidState("Session worktree is dirty and was preserved.", [
+            "Commit or discard the worktree changes, then retire the Session.",
+          ]);
         store.retireSessionNow(session.id);
-        output(
-          program,
-          {
-            status: "ready",
-            actionRequired: false,
-            nextSteps: [],
-            retired: true,
-          },
-          `Retired Session ${session.id}`,
-        );
+        emit(program, ok({ retired: true }), `Retired Session ${session.id}`);
       } finally {
         store.close();
       }
     });
 
-  const searchUsers = async (binding: Binding, query: string) => {
-    const connector = (await connectorModules).get(binding.connector);
-    if (connector === undefined)
-      throw new Error(`Connector ${binding.connector} unavailable`);
-    const credentials = await new BindingCredentialService(
-      credentialStore,
-    ).require(binding.id);
-    return connector.searchUsers(query, credentials);
+  const context: CommandContext = {
+    program,
+    paths: () => productPaths(program),
+    openStore: () => openStore(program),
+    openExistingStore: () => openExistingStore(program),
+    credentials: credentialStore,
+    connectors: async () => connectorModules,
+    relay: (store) =>
+      relayManager(store, credentialStore(), dependencies.relayFetch),
+    prompt,
+    external,
+    interactive,
+    formatter,
+    services: serviceManager,
+    serviceDefinition,
+    assertStableServiceEntry,
+    offerDaemon,
+    daemonStatus: async () => serviceManager().status(serviceDefinition()),
   };
-  const access = program
-    .command("access")
-    .description("Manage shared-user access for a Binding")
-    .addHelpText(
-      "after",
-      `
-Interactive mode selects the Agent, Binding, and provider user when omitted.
-
-Examples:
-  agentchannels access add
-  agentchannels access list --binding bd_...
-  agentchannels access remove --binding bd_... --user PLATFORM_USER_ID`,
-    );
-  access.action(() => access.outputHelp());
-  access
-    .command("add")
-    .description("Grant a provider user access to a Binding")
-    .option("--user <id>", "stable provider user ID for non-interactive use")
-    .option("--agent <id>", "target Agent ID")
-    .option("--binding <id>", "target Binding ID")
-    .addHelpText(
-      "after",
-      `
-Human mode searches the provider when --user is omitted. Automation must pass
---agent, --binding, and --user.
-
-Example:
-  agentchannels access add --agent ag_... --binding bd_... --user U123...`,
-    )
-    .action(
-      async (options: { user?: string; agent?: string; binding?: string }) => {
-        const store = openStore(program);
-        try {
-          const selectedAgent = await resolveAgent(
-            store,
-            options.agent,
-            interactive(),
-            prompt,
-          );
-          const selected = await resolveBinding(
-            store,
-            selectedAgent,
-            options.binding,
-            interactive(),
-            prompt,
-          );
-          let userId = options.user;
-          if (userId === undefined) {
-            if (!interactive())
-              throw new Error("--user is required in non-interactive mode");
-            const results = await searchUsers(
-              selected,
-              await prompt.input("Search by name or email"),
-            );
-            if (results.length === 0)
-              throw new Error("No matching users found");
-            userId = await prompt.select(
-              "User",
-              results.map((user) => ({
-                value: user.id,
-                label: user.name,
-                ...(user.email === null ? {} : { description: user.email }),
-              })),
-            );
-          }
-          const grant = store.grantAccess(selected.id, userId);
-          output(
-            program,
-            { status: "ready", actionRequired: false, nextSteps: [], grant },
-            `Granted access via ${selected.connector}`,
-          );
-        } finally {
-          store.close();
-        }
-      },
-    );
-  access
-    .command("list")
-    .description("List users who can use a Binding")
-    .option("--agent <id>", "target Agent ID")
-    .option("--binding <id>", "target Binding ID")
-    .addHelpText(
-      "after",
-      `
-Examples:
-  agentchannels access list --binding bd_...
-  agentchannels access list --agent ag_... --binding bd_... --json`,
-    )
-    .action(async (options: { agent?: string; binding?: string }) => {
-      const store = openStore(program);
-      try {
-        const selectedAgent = await resolveAgent(
-          store,
-          options.agent,
-          interactive(),
-          prompt,
-        );
-        const selected = await resolveBinding(
-          store,
-          selectedAgent,
-          options.binding,
-          interactive(),
-          prompt,
-        );
-        const grants = store.listAccess(selected.id);
-        output(
-          program,
-          { status: "ready", actionRequired: false, nextSteps: [], grants },
-          grants.map((item) => item.userId).join("\n") || "No shared users",
-        );
-      } finally {
-        store.close();
-      }
-    });
-  access
-    .command("remove")
-    .description("Revoke a provider user's Binding access")
-    .requiredOption("--user <id>", "stable provider user ID")
-    .option("--agent <id>", "target Agent ID")
-    .option("--binding <id>", "target Binding ID")
-    .addHelpText(
-      "after",
-      `
-Examples:
-  agentchannels access remove --binding bd_... --user U123...
-  agentchannels access remove --agent ag_... --binding bd_... --user U123...`,
-    )
-    .action(
-      async (options: { user: string; agent?: string; binding?: string }) => {
-        const store = openStore(program);
-        try {
-          const selectedAgent = await resolveAgent(
-            store,
-            options.agent,
-            interactive(),
-            prompt,
-          );
-          const selected = await resolveBinding(
-            store,
-            selectedAgent,
-            options.binding,
-            interactive(),
-            prompt,
-          );
-          const removed = store.revokeAccess(selected.id, options.user);
-          output(
-            program,
-            { status: "ready", actionRequired: false, nextSteps: [], removed },
-            removed ? "Access removed" : "No matching grant",
-          );
-        } finally {
-          store.close();
-        }
-      },
-    );
-
-  const users = program
-    .command("users")
-    .description("Find provider users for access grants")
-    .addHelpText(
-      "after",
-      `
-Search uses a configured Slack or Linear Binding and returns stable provider
-user IDs for access grants.
-
-Example:
-  agentchannels users search alice --binding bd_...`,
-    );
-  users.action(() => users.outputHelp());
-  users
-    .command("search")
-    .description("Search by name or email and print stable provider user IDs")
-    .argument("<query>", "provider user name or email")
-    .option("--agent <id>", "target Agent ID")
-    .option("--binding <id>", "provider Binding to search")
-    .addHelpText(
-      "after",
-      `
-Example:
-  agentchannels users search alice --binding bd_...
-
-Use the returned stable ID with agentchannels access add --user <id>.`,
-    )
-    .action(
-      async (query: string, options: { agent?: string; binding?: string }) => {
-        const store = openStore(program);
-        try {
-          const selectedAgent = await resolveAgent(
-            store,
-            options.agent,
-            interactive(),
-            prompt,
-          );
-          const selected = await resolveBinding(
-            store,
-            selectedAgent,
-            options.binding,
-            interactive(),
-            prompt,
-          );
-          const results = await searchUsers(selected, query);
-          output(
-            program,
-            {
-              status: "ready",
-              actionRequired: false,
-              nextSteps: [],
-              users: results,
-            },
-            results
-              .map((user) => `${user.name}\t${user.email ?? ""}\t${user.id}`)
-              .join("\n") || "No users found",
-          );
-        } finally {
-          store.close();
-        }
-      },
-    );
-
-  const relay = program
-    .command("relay")
-    .description("Select or inspect the installation-wide AgentChannels Relay")
-    .addHelpText(
-      "after",
-      `
-Hosted Relay is the default for normal agentchannels init.
-Use relay use only for an explicit hosted/self-hosted installation cutover.
-
-Examples:
-  agentchannels relay status
-  agentchannels relay use --hosted
-  agentchannels relay use --url https://relay.example.com --enrollment-token-stdin`,
-    );
-  const showRelayStatus = (): void => {
-    const store = openExistingStore(program);
-    try {
-      const status =
-        store === undefined
-          ? { status: "uninitialized" as const }
-          : relayManager(
-              store,
-              credentialStore,
-              dependencies.relayFetch,
-            ).status();
-      output(
-        program,
-        status,
-        status.status === "uninitialized"
-          ? `${formatter().pending("Relay uninitialized")}\nRun agentchannels init to connect a channel.`
-          : formatter().success("Relay configured"),
-      );
-    } finally {
-      store?.close();
-    }
-  };
-  relay.action(showRelayStatus);
-  relay
-    .command("status")
-    .description("Show the selected Relay and enrollment state")
-    .addHelpText(
-      "after",
-      `
-The Relay is selected once for the local installation and shared by all
-Agents and Bindings.
-
-Examples:
-  agentchannels relay status
-  agentchannels relay status --json`,
-    )
-    .action(showRelayStatus);
-  relay
-    .command("use")
-    .description("Select the hosted or a self-hosted Relay")
-    .addOption(
-      new Option("--hosted", "select the official hosted Relay").conflicts(
-        "url",
-      ),
-    )
-    .addOption(
-      new Option("--url <origin>", "self-hosted HTTPS origin").conflicts(
-        "hosted",
-      ),
-    )
-    .addOption(
-      new Option(
-        "--enrollment-token-stdin",
-        "read self-hosted enrollment authorization from stdin",
-      ).conflicts("hosted"),
-    )
-    .option(
-      "--acknowledge-binding-reconfiguration",
-      "acknowledge provider webhook URL changes",
-    )
-    .addHelpText(
-      "after",
-      `
-Hosted is the normal default. Use --url only for an explicit self-hosted
-origin; self-hosted automation must provide enrollment authorization on stdin.
-Changing Relay with existing Bindings requires
---acknowledge-binding-reconfiguration after reviewing the returned URLs.
-
-Examples:
-  agentchannels relay use --hosted
-  agentchannels relay use --url https://relay.example.com \\
-    --enrollment-token-stdin < enrollment-token`,
-    )
-    .action(
-      async (options: {
-        hosted?: boolean;
-        url?: string;
-        enrollmentTokenStdin?: boolean;
-        acknowledgeBindingReconfiguration?: boolean;
-      }) => {
-        let origin = options.hosted ? HOSTED_RELAY_ORIGIN : options.url;
-        if (origin === undefined) {
-          if (!interactive())
-            throw new Error("relay use requires --hosted or --url");
-          origin = await prompt.input("Self-hosted Relay URL");
-        }
-        const normalized = parseRelayOrigin(origin).origin;
-        const store = openStore(program);
-        try {
-          const manager = relayManager(
-            store,
-            credentialStore,
-            dependencies.relayFetch,
-          );
-          const requirement = manager.preview(normalized);
-          let acknowledged = options.acknowledgeBindingReconfiguration === true;
-          if (requirement !== undefined && !acknowledged) {
-            if (!interactive()) {
-              output(
-                program,
-                requirement,
-                JSON.stringify(requirement, null, 2),
-              );
-              return;
-            }
-            acknowledged = await prompt.confirm(
-              "Update provider webhook URLs?",
-              false,
-            );
-            if (!acknowledged) {
-              output(program, { status: "unchanged" }, "Relay unchanged.");
-              return;
-            }
-          }
-          let enrollmentToken: string | undefined;
-          if (normalized !== HOSTED_RELAY_ORIGIN) {
-            if (options.enrollmentTokenStdin)
-              enrollmentToken = (await readStandardInput(true)).trim();
-            else if (!interactive())
-              throw new Error(
-                "Self-hosted Relay requires --enrollment-token-stdin",
-              );
-            else {
-              const entered = await prompt.secret(
-                "Enrollment token (blank for explicit open enrollment)",
-              );
-              enrollmentToken = entered || undefined;
-            }
-          }
-          const result = await manager.use({
-            origin: normalized,
-            ...(enrollmentToken === undefined ? {} : { enrollmentToken }),
-            ...(acknowledged
-              ? { acknowledgeBindingReconfiguration: true }
-              : {}),
-          });
-          if (result.action === "restart_daemon") {
-            const service = serviceManager();
-            const current = await service.status(serviceDefinition());
-            if (current.installed) {
-              const definition = serviceDefinition();
-              assertStableServiceEntry(definition);
-              await service.restart(definition);
-            }
-          }
-          output(
-            program,
-            result,
-            result.action === "restart_daemon"
-              ? `${formatter().success("Relay selected")}\n${result.bindings.length > 0 ? "Update the listed provider webhooks." : ""}`
-              : formatter().success("Relay selected"),
-          );
-        } finally {
-          store.close();
-        }
-      },
-    );
-
-  const daemon = program
-    .command("daemon")
-    .description("Run in the foreground or manage the background daemon")
-    .addHelpText(
-      "after",
-      `
-Foreground:
-  agentchannels daemon
-
-Background lifecycle:
-  agentchannels daemon install|start|restart|stop|status|uninstall
-
-Background services are per-user LaunchAgents on macOS and systemd user
-services on Linux. Do not run these commands with sudo.`,
-    );
-  daemon
-    .option("--concurrency <count>", "maximum simultaneous runtime turns", "2")
-    .action(async (options: { concurrency: string }) => {
-      await startDaemon({
-        concurrency: Number.parseInt(options.concurrency, 10),
-        ...(program.opts<GlobalOptions>().home === undefined
-          ? {}
-          : { home: program.opts<GlobalOptions>().home }),
-      });
-    });
-  const lifecycleOutput = (
-    result: Awaited<ReturnType<ServiceManager["install"]>>,
-    message: string,
-  ): void => {
-    output(
-      program,
-      {
-        status: "ready",
-        actionRequired: false,
-        nextSteps: [],
-        service: result,
-      },
-      formatter().success(message),
-    );
-  };
-  daemon
-    .command("install")
-    .description("Install or reconcile the per-user background daemon")
-    .addHelpText(
-      "after",
-      `
-Installs and starts the per-user service. It does not require sudo.
-
-Example:
-  agentchannels daemon install`,
-    )
-    .action(async () => {
-      const definition = serviceDefinition();
-      assertStableServiceEntry(definition);
-      const result = await serviceManager().reconcile(definition);
-      if (result.operation === "unsupported")
-        throw new CliError(
-          "SERVICE_MANAGER_FAILED",
-          `Background services are unsupported on ${result.platform}.`,
-          ["Run agentchannels daemon in the foreground."],
-        );
-      lifecycleOutput(result, "Background daemon running");
-    });
-  daemon
-    .command("start")
-    .description("Start the installed background daemon")
-    .addHelpText(
-      "after",
-      `
-The daemon must already be installed.
-
-Example:
-  agentchannels daemon start`,
-    )
-    .action(async () => {
-      const result = await serviceManager().start(serviceDefinition());
-      lifecycleOutput(result, "Daemon running");
-    });
-  daemon
-    .command("restart")
-    .description("Restart the installed background daemon")
-    .addHelpText(
-      "after",
-      `
-Use this after changing the installation Relay or daemon configuration.
-
-Example:
-  agentchannels daemon restart`,
-    )
-    .action(async () => {
-      const definition = serviceDefinition();
-      assertStableServiceEntry(definition);
-      const result = await serviceManager().restart(definition);
-      lifecycleOutput(result, "Daemon restarted");
-    });
-  daemon
-    .command("stop")
-    .description("Stop the background daemon")
-    .addHelpText(
-      "after",
-      `
-Stopping the service leaves configured Agents and Bindings unchanged.
-
-Example:
-  agentchannels daemon stop`,
-    )
-    .action(async () => {
-      const result = await serviceManager().stop(serviceDefinition());
-      lifecycleOutput(result, "Daemon stopped");
-    });
-  daemon
-    .command("status")
-    .description("Show background daemon installation and running state")
-    .addHelpText(
-      "after",
-      `
-Use the next step in this output to install or start the service when needed.
-
-Examples:
-  agentchannels daemon status
-  agentchannels daemon status --json`,
-    )
-    .action(async () => {
-      const status = await serviceManager().status(serviceDefinition());
-      const nextSteps = status.running
-        ? []
-        : [
-            status.supported
-              ? status.installed
-                ? "Run agentchannels daemon start."
-                : "Run agentchannels daemon install."
-              : "Run agentchannels daemon in the foreground.",
-          ];
-      output(
-        program,
-        {
-          status: status.running ? "ready" : "action_required",
-          actionRequired: !status.running,
-          nextSteps,
-          service: status,
-        },
-        status.running
-          ? formatter().success("Daemon running")
-          : `${formatter().pending(`Daemon ${status.installed ? "stopped" : status.supported ? "not installed" : "unsupported"}`)}\n${nextSteps[0]}`,
-      );
-    });
-  daemon
-    .command("uninstall")
-    .description("Remove the per-user background daemon")
-    .addHelpText(
-      "after",
-      `
-Uninstalling stops and removes the service definition; local AgentChannels
-state and provider credentials remain available.
-
-Example:
-  agentchannels daemon uninstall`,
-    )
-    .action(async () => {
-      const result = await serviceManager().uninstall(serviceDefinition());
-      lifecycleOutput(result, "Daemon uninstalled");
-    });
+  registerAccessCommands(context);
+  registerUsersCommands(context);
+  registerRelayCommands(context);
+  registerDaemonCommands(context);
 
   overrideCommandExits(program);
   return program;

@@ -3,7 +3,17 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   MalformedConnectorCredentialsError,
   ProviderRejectedError,
-} from "./connector.js";
+} from "./connector.ts";
+import {
+  header,
+  jsonObjectBody,
+  objectValue,
+  parseJsonResponse,
+  providerFailure,
+  stringValue,
+  type FetchLike,
+  type JsonObject,
+} from "./http.ts";
 import type {
   Connector,
   ConnectorCredentials,
@@ -14,26 +24,19 @@ import type {
   PendingWebhookResponse,
   VerifiedConnectorCredentials,
   VerificationResult,
-} from "./connector.js";
+} from "./connector.ts";
 import type {
   ConnectorCommand,
   DeliveryMessage,
   InboundRequest,
   RemoteUser,
-} from "../core/types.js";
-
-export type FetchLike = (
-  input: string | URL,
-  init?: RequestInit,
-) => Promise<Response>;
+} from "../model.ts";
 
 export type SlackConnectorOptions = Readonly<{
   fetch?: FetchLike;
   apiBaseUrl?: string;
   replayWindowSeconds?: number;
 }>;
-
-type JsonObject = Readonly<Record<string, unknown>>;
 
 const DEFAULT_API_URL = "https://slack.com/api";
 const DEFAULT_REPLAY_WINDOW_SECONDS = 300;
@@ -62,10 +65,14 @@ export function createSlackAppManifest(options: {
 }): SlackAppManifest {
   const agentName = options.agentName.trim();
   if (agentName.length < 2)
-    throw new Error("Slack Agent name must contain at least two characters");
+    throw new MalformedConnectorCredentialsError(
+      "Slack Agent name must contain at least two characters.",
+    );
   const webhook = new URL(options.relayWebhookUrl);
   if (webhook.protocol !== "https:")
-    throw new Error("Slack webhook URL must use HTTPS");
+    throw new MalformedConnectorCredentialsError(
+      "Slack webhook URL must use HTTPS.",
+    );
   const requestUrl = webhook.toString();
   return {
     display_information: { name: agentName },
@@ -103,34 +110,6 @@ export function createSlackAppManifest(options: {
       token_rotation_enabled: false,
     },
   };
-}
-
-function header(
-  headers: Readonly<Record<string, string>>,
-  name: string,
-): string | undefined {
-  const wanted = name.toLowerCase();
-  return Object.entries(headers).find(
-    ([key]) => key.toLowerCase() === wanted,
-  )?.[1];
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function objectValue(value: unknown): JsonObject | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as JsonObject)
-    : undefined;
-}
-
-function jsonBody(rawBody: Buffer): JsonObject | undefined {
-  try {
-    return objectValue(JSON.parse(rawBody.toString("utf8")));
-  } catch {
-    return undefined;
-  }
 }
 
 function hmacMatches(secret: string, base: string, signature: string): boolean {
@@ -325,7 +304,7 @@ export class SlackConnector implements Connector, ConnectorModule {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
     });
-    const result = await parseResponse(response);
+    const result = await parseJsonResponse(response);
     const workspaceId = stringValue(result.team_id);
     const botUserId = stringValue(result.user_id);
     if (!response.ok || result.ok !== true || !workspaceId || !botUserId) {
@@ -345,7 +324,7 @@ export class SlackConnector implements Connector, ConnectorModule {
     request: PendingWebhook,
   ): PendingWebhookResponse | undefined {
     if (request.connector !== this.type) return undefined;
-    const body = jsonBody(Buffer.from(request.rawBodyBase64, "base64"));
+    const body = jsonObjectBody(Buffer.from(request.rawBodyBase64, "base64"));
     if (body?.type !== "url_verification") return undefined;
     const challenge = stringValue(body.challenge);
     if (!challenge) return { status: 400, body: "Missing challenge" };
@@ -360,7 +339,7 @@ export class SlackConnector implements Connector, ConnectorModule {
     request: InboundRequest,
     credentials: ConnectorCredentials,
   ): VerificationResult {
-    const secret = credentials.signingSecret ?? credentials.slackSigningSecret;
+    const secret = credentials.signingSecret;
     if (!secret)
       return { ok: false, status: 500, reason: "missing Slack signing secret" };
 
@@ -395,7 +374,7 @@ export class SlackConnector implements Connector, ConnectorModule {
     ).toLowerCase();
     const body = contentType.includes("application/x-www-form-urlencoded")
       ? parseFormBody(request.rawBody)
-      : (jsonBody(request.rawBody) ?? parseFormBody(request.rawBody));
+      : (jsonObjectBody(request.rawBody) ?? parseFormBody(request.rawBody));
     if (!body)
       return { ok: false, status: 400, reason: "invalid Slack payload" };
 
@@ -474,11 +453,11 @@ export class SlackConnector implements Connector, ConnectorModule {
     message: DeliveryMessage,
     credentials: ConnectorCredentials,
   ): Promise<void> {
-    const token =
-      credentials.botToken ??
-      credentials.accessToken ??
-      credentials.slackBotToken;
-    if (!token) throw new Error("missing Slack bot token");
+    const token = credentials.botToken;
+    if (!token)
+      throw new MalformedConnectorCredentialsError(
+        "Slack Bot Token is missing.",
+      );
     const metadata = objectValue(message.metadata);
     const [channel, ...threadParts] = message.remoteConversationId.split(":");
     const body: Record<string, unknown> = {
@@ -635,13 +614,14 @@ export class SlackConnector implements Connector, ConnectorModule {
       },
       body: JSON.stringify(body),
     });
-    const parsed = await parseResponse(response);
+    const parsed = await parseJsonResponse(response);
     if (!response.ok || parsed.ok !== true) {
-      const error =
-        stringValue(parsed.error) ?? `HTTP ${response.status.toString()}`;
-      const retryAfter = response.headers.get("retry-after");
-      throw new Error(
-        `Slack chat.postMessage failed: ${error}${retryAfter ? ` (retry after ${retryAfter}s)` : ""}`,
+      throw new ProviderRejectedError(
+        providerFailure(
+          "Slack chat.postMessage",
+          response,
+          stringValue(parsed.error),
+        ),
       );
     }
   }
@@ -650,11 +630,11 @@ export class SlackConnector implements Connector, ConnectorModule {
     query: string,
     credentials: ConnectorCredentials,
   ): Promise<RemoteUser[]> {
-    const token =
-      credentials.botToken ??
-      credentials.accessToken ??
-      credentials.slackBotToken;
-    if (!token) throw new Error("missing Slack bot token");
+    const token = credentials.botToken;
+    if (!token)
+      throw new MalformedConnectorCredentialsError(
+        "Slack Bot Token is missing.",
+      );
     const normalized = query.trim().toLocaleLowerCase();
     const results: RemoteUser[] = [];
     let cursor: string | undefined;
@@ -668,13 +648,14 @@ export class SlackConnector implements Connector, ConnectorModule {
           headers: { authorization: `Bearer ${token}` },
         },
       );
-      const parsed = await parseResponse(response);
+      const parsed = await parseJsonResponse(response);
       if (!response.ok || parsed.ok !== true) {
-        const error =
-          stringValue(parsed.error) ?? `HTTP ${response.status.toString()}`;
-        const retryAfter = response.headers.get("retry-after");
-        throw new Error(
-          `Slack users.list failed: ${error}${retryAfter ? ` (retry after ${retryAfter}s)` : ""}`,
+        throw new ProviderRejectedError(
+          providerFailure(
+            "Slack users.list",
+            response,
+            stringValue(parsed.error),
+          ),
         );
       }
       const members = Array.isArray(parsed.members) ? parsed.members : [];
@@ -715,18 +696,5 @@ export class SlackConnector implements Connector, ConnectorModule {
     return results;
   }
 }
-
-async function parseResponse(response: Response): Promise<JsonObject> {
-  const text = await response.text();
-  try {
-    return objectValue(JSON.parse(text)) ?? {};
-  } catch {
-    return {};
-  }
-}
-
-export const createSlackConnector = (
-  options: SlackConnectorOptions = {},
-): SlackConnector => new SlackConnector(options);
 
 export default new SlackConnector() satisfies ConnectorModule;

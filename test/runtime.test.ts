@@ -4,7 +4,7 @@ import type {
   Query,
   SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { ClaudeRuntime } from "../src/runtime/runtime.js";
+import { ClaudeRuntime } from "../src/runtimes/claude.ts";
 
 function fakeQuery(messages: SDKMessage[]): Query {
   const iterator = (async function* (): AsyncIterable<SDKMessage> {
@@ -115,7 +115,10 @@ describe("ClaudeRuntime", () => {
   it("resumes with runtime ID and routes interaction callbacks", async () => {
     let captured: Options | undefined;
     const requestInteraction = vi.fn(() =>
-      Promise.resolve({ answers: { "Which?": "yes" } }),
+      Promise.resolve({
+        status: "answered" as const,
+        response: { answers: { "Which?": "yes" } },
+      }),
     );
     const sdkQuery = vi.fn((params: { options?: Options }) => {
       captured = params.options;
@@ -150,6 +153,60 @@ describe("ClaudeRuntime", () => {
     );
   });
 
+  it("settles permission replies with one predicate, not two", () => {
+    // The coordinator classified replies with a deny-word list while the adapter
+    // classified them with an allow-word list. Anything in neither list, such as
+    // "sure", was persisted as answered but refused as a tool call.
+    const runtime = new ClaudeRuntime();
+    const permission = {
+      kind: "permission" as const,
+      request: {},
+      progress: undefined,
+    };
+
+    for (const reply of ["allow", "yes", "Proceed", true]) {
+      expect(runtime.interpretResponse(permission, reply)).toMatchObject({
+        state: "resolved",
+        status: "answered",
+      });
+    }
+    for (const reply of ["deny", "no", "sure", "maybe", "", false, {}]) {
+      expect(
+        runtime.interpretResponse(permission, reply),
+        JSON.stringify(reply),
+      ).toMatchObject({ state: "resolved", status: "denied" });
+    }
+  });
+
+  it("keeps a multi-part question partial until every part is answered", () => {
+    const runtime = new ClaudeRuntime();
+    const pending = {
+      kind: "question" as const,
+      request: {
+        data: {
+          questions: [{ question: "Which?" }, { question: "When?" }],
+        },
+      },
+      progress: undefined as unknown,
+    };
+
+    const first = runtime.interpretResponse(pending, {
+      questionIndex: 0,
+      answer: "the first",
+    });
+    expect(first.state).toBe("partial");
+
+    const second = runtime.interpretResponse(
+      { ...pending, progress: first.state === "partial" ? first.progress : {} },
+      { questionIndex: 1, answer: "tomorrow" },
+    );
+    expect(second).toMatchObject({
+      state: "resolved",
+      status: "answered",
+      response: { answers: { "Which?": "the first", "When?": "tomorrow" } },
+    });
+  });
+
   it("sends plan revision feedback as a real streamed user message", async () => {
     let captured: Options | undefined;
     let prompts: AsyncIterable<unknown> | undefined;
@@ -168,7 +225,11 @@ describe("ClaudeRuntime", () => {
       cwd: "/repo/session",
       additionalDirectories: [],
       prompt: "plan this",
-      requestInteraction: () => Promise.resolve("Revise the second step"),
+      requestInteraction: () =>
+        Promise.resolve({
+          status: "denied" as const,
+          response: "Revise the second step",
+        }),
     });
     if (prompts === undefined || captured?.canUseTool === undefined)
       throw new Error("Streaming prompts were not configured");

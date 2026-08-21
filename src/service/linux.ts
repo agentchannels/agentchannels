@@ -1,13 +1,13 @@
 import { join } from "node:path";
 
-import { commandEnvironment, logDirectory, shellQuote } from "./format.js";
-import { assertExpectedServiceExit } from "./guards.js";
+import { commandEnvironment, logDirectory, shellQuote } from "./definition.ts";
+import { assertExpectedServiceExit } from "./guards.ts";
 import type {
   ServiceDefinition,
   ServiceOperationResult,
   ServicePlatformFactory,
   ServiceStatus,
-} from "./types.js";
+} from "./types.ts";
 
 const LINUX_PLATFORM = "linux" as NodeJS.Platform;
 

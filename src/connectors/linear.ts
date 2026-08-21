@@ -4,7 +4,17 @@ import { isIP } from "node:net";
 import {
   MalformedConnectorCredentialsError,
   ProviderRejectedError,
-} from "./connector.js";
+} from "./connector.ts";
+import {
+  header,
+  jsonObjectBody,
+  objectValue,
+  parseJsonResponse,
+  providerFailure,
+  stringValue,
+  type FetchLike,
+  type JsonObject,
+} from "./http.ts";
 import type {
   Connector,
   ConnectorCredentials,
@@ -13,27 +23,21 @@ import type {
   OnboardingContext,
   VerifiedConnectorCredentials,
   VerificationResult,
-} from "./connector.js";
+} from "./connector.ts";
 import type {
   ConnectorCommand,
   DeliveryMessage,
   InboundRequest,
   RemoteUser,
-} from "../core/types.js";
-
-export type LinearFetchLike = (
-  input: string | URL,
-  init?: RequestInit,
-) => Promise<Response>;
+} from "../model.ts";
 
 export type LinearConnectorOptions = Readonly<{
-  fetch?: LinearFetchLike;
+  fetch?: FetchLike;
   apiUrl?: string;
   oauthTokenUrl?: string;
   replayWindowMilliseconds?: number;
 }>;
 
-type JsonObject = Readonly<Record<string, unknown>>;
 const DEFAULT_API_URL = "https://api.linear.app/graphql";
 const DEFAULT_OAUTH_TOKEN_URL = "https://api.linear.app/oauth/token";
 const DEFAULT_REPLAY_WINDOW_MS = 60_000;
@@ -97,16 +101,22 @@ export function createLinearOwnedManifest(options: {
 }): LinearAppManifest {
   const agentName = options.agentName.trim();
   if (agentName.length < 2)
-    throw new Error("Linear Agent name must contain at least two characters");
+    throw new MalformedConnectorCredentialsError(
+      "Linear Agent name must contain at least two characters.",
+    );
   if (/linear/i.test(agentName))
-    throw new Error("Linear application names must not contain “Linear”");
+    throw new MalformedConnectorCredentialsError(
+      "Linear application names must not contain “Linear”.",
+    );
   const origin = new URL(options.relayOrigin).origin;
   const webhook = new URL(options.relayWebhookUrl);
   if (webhook.protocol !== "https:")
-    throw new Error("Linear webhook URL must use HTTPS");
+    throw new MalformedConnectorCredentialsError(
+      "Linear webhook URL must use HTTPS.",
+    );
   if (isPrivateLinearWebhookHost(webhook.hostname))
-    throw new Error(
-      "Linear webhook URL must use a publicly reachable non-Linear host",
+    throw new MalformedConnectorCredentialsError(
+      "Linear webhook URL must use a publicly reachable non-Linear host.",
     );
   return {
     $schema: "https://linear.app/.well-known/oauth-app-manifest.schema.json",
@@ -126,34 +136,6 @@ export function createLinearOwnedManifest(options: {
       resourceTypes: ["AgentSessionEvent"],
     },
   };
-}
-
-function header(
-  headers: Readonly<Record<string, string>>,
-  name: string,
-): string | undefined {
-  const wanted = name.toLowerCase();
-  return Object.entries(headers).find(
-    ([key]) => key.toLowerCase() === wanted,
-  )?.[1];
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function objectValue(value: unknown): JsonObject | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as JsonObject)
-    : undefined;
-}
-
-function parseBody(rawBody: Buffer): JsonObject | undefined {
-  try {
-    return objectValue(JSON.parse(rawBody.toString("utf8")));
-  } catch {
-    return undefined;
-  }
 }
 
 function hmacMatches(
@@ -267,7 +249,7 @@ export class LinearConnector implements Connector, ConnectorModule {
     { key: "clientSecret", label: "Linear Client Secret" },
     { key: "webhookSecret", label: "Linear Webhook Signing Secret" },
   ] as const;
-  private readonly fetcher: LinearFetchLike;
+  private readonly fetcher: FetchLike;
   private readonly apiUrl: string;
   private readonly oauthTokenUrl: string;
   private readonly replayWindowMilliseconds: number;
@@ -329,7 +311,7 @@ export class LinearConnector implements Connector, ConnectorModule {
           client_secret: clientSecret,
         }),
       });
-      const tokenResult = await parseResponse(tokenResponse);
+      const tokenResult = await parseJsonResponse(tokenResponse);
       apiToken = stringValue(tokenResult.access_token);
       if (!tokenResponse.ok || !apiToken) {
         throw new ProviderRejectedError(
@@ -362,7 +344,6 @@ export class LinearConnector implements Connector, ConnectorModule {
       credentials: {
         ...credentials,
         apiToken,
-        accessToken: apiToken,
         ...(oauthProvider === undefined ? {} : { oauthProvider }),
         ...(expiresAt === undefined ? {} : { expiresAt }),
       },
@@ -376,10 +357,7 @@ export class LinearConnector implements Connector, ConnectorModule {
     request: InboundRequest,
     credentials: ConnectorCredentials,
   ): VerificationResult {
-    const secret =
-      credentials.webhookSecret ??
-      credentials.linearWebhookSecret ??
-      credentials.signingSecret;
+    const secret = credentials.webhookSecret;
     if (!secret)
       return {
         ok: false,
@@ -390,7 +368,7 @@ export class LinearConnector implements Connector, ConnectorModule {
     if (!signature || !hmacMatches(secret, request.rawBody, signature)) {
       return { ok: false, status: 401, reason: "invalid Linear signature" };
     }
-    const body = parseBody(request.rawBody);
+    const body = jsonObjectBody(request.rawBody);
     if (!body)
       return { ok: false, status: 400, reason: "invalid Linear payload" };
     const timestampValue = body.webhookTimestamp;
@@ -422,11 +400,11 @@ export class LinearConnector implements Connector, ConnectorModule {
     message: DeliveryMessage,
     credentials: ConnectorCredentials,
   ): Promise<void> {
-    const token =
-      credentials.apiToken ??
-      credentials.accessToken ??
-      credentials.linearApiToken;
-    if (!token) throw new Error("missing Linear API token");
+    const token = credentials.apiToken;
+    if (!token)
+      throw new MalformedConnectorCredentialsError(
+        "Linear API token is missing.",
+      );
     const metadata = objectValue(message.metadata);
     const content = contentFor(message);
     const input: Record<string, unknown> = {
@@ -446,18 +424,18 @@ export class LinearConnector implements Connector, ConnectorModule {
     );
     const operation = objectValue(result.agentActivityCreate);
     if (operation?.success !== true)
-      throw new Error("Linear agentActivityCreate failed");
+      throw new ProviderRejectedError("Linear agentActivityCreate failed.");
   }
 
   async searchUsers(
     query: string,
     credentials: ConnectorCredentials,
   ): Promise<RemoteUser[]> {
-    const token =
-      credentials.apiToken ??
-      credentials.accessToken ??
-      credentials.linearApiToken;
-    if (!token) throw new Error("missing Linear API token");
+    const token = credentials.apiToken;
+    if (!token)
+      throw new MalformedConnectorCredentialsError(
+        "Linear API token is missing.",
+      );
     const normalized = query.trim().toLocaleLowerCase();
     const users: RemoteUser[] = [];
     let after: string | null = null;
@@ -513,32 +491,19 @@ export class LinearConnector implements Connector, ConnectorModule {
       },
       body: JSON.stringify({ query, variables }),
     });
-    const parsed = await parseResponse(response);
+    const parsed = await parseJsonResponse(response);
     const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
     if (!response.ok || errors.length > 0) {
-      const first = objectValue(errors[0]);
-      const message =
-        stringValue(first?.message) ?? `HTTP ${String(response.status)}`;
-      const retryAfter = response.headers.get("retry-after");
-      throw new Error(
-        `Linear GraphQL request failed: ${message}${retryAfter ? ` (retry after ${retryAfter}s)` : ""}`,
+      throw new ProviderRejectedError(
+        providerFailure(
+          "Linear GraphQL request",
+          response,
+          stringValue(objectValue(errors[0])?.message),
+        ),
       );
     }
     return objectValue(parsed.data) ?? {};
   }
 }
-
-async function parseResponse(response: Response): Promise<JsonObject> {
-  const text = await response.text();
-  try {
-    return objectValue(JSON.parse(text)) ?? {};
-  } catch {
-    return {};
-  }
-}
-
-export const createLinearConnector = (
-  options: LinearConnectorOptions = {},
-): LinearConnector => new LinearConnector(options);
 
 export default new LinearConnector() satisfies ConnectorModule;

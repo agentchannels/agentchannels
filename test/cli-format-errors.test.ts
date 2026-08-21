@@ -1,31 +1,30 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  CliError,
-  normalizeCliError,
-  redactSecrets,
-  renderCliError,
-} from "../src/cli/errors.js";
+import { AgentChannelsError } from "../src/errors.ts";
+import { classifyError, renderError } from "../src/cli/errors.ts";
 import {
   MalformedConnectorCredentialsError,
   ProviderRejectedError,
-} from "../src/connectors/connector.js";
+} from "../src/connectors/connector.ts";
 import {
   PrivilegedServiceError,
   ServiceManagerError,
   UnsupportedServicePlatformError,
-} from "../src/service/guards.js";
-import { Persistence } from "../src/persistence/store.js";
-import { redactErrorDiagnostic } from "../src/security/redaction.js";
+} from "../src/service/guards.ts";
+import { Persistence } from "../src/store/store.ts";
+import {
+  redactErrorDiagnostic,
+  redactSensitiveText,
+} from "../src/security/redact.ts";
 import {
   createTerminalFormatter,
   plainTerminalFormatter,
-} from "../src/cli/format.js";
+} from "../src/cli/format.ts";
 import {
   installationOverview,
   renderOverview,
   type InstallationOverview,
-} from "../src/cli/status.js";
+} from "../src/cli/status.ts";
 
 describe("CLI terminal formatter", () => {
   it("uses the documented colors only for human TTY output", () => {
@@ -65,22 +64,22 @@ describe("CLI errors", () => {
     ["CANCELLED", 130],
     ["INTERNAL_ERROR", 1],
   ] as const)("keeps %s at stable exit %i", (code, exitCode) => {
-    expect(new CliError(code, "failure", ["Retry the command."])).toMatchObject(
-      {
-        code,
-        exitCode,
-      },
-    );
+    expect(
+      new AgentChannelsError(code, "failure", ["Retry the command."]),
+    ).toMatchObject({
+      code,
+      exitCode,
+    });
   });
 
   it("uses typed connector boundary errors before fallback classification", () => {
     expect(
-      normalizeCliError(
+      classifyError(
         new MalformedConnectorCredentialsError("Slack credentials are missing"),
       ),
     ).toMatchObject({ code: "MALFORMED_CREDENTIALS", exitCode: 5 });
     expect(
-      normalizeCliError(
+      classifyError(
         new ProviderRejectedError("Slack rejected the credentials"),
       ),
     ).toMatchObject({ code: "PROVIDER_REJECTED", exitCode: 6 });
@@ -92,18 +91,24 @@ describe("CLI errors", () => {
       new Error("launchctl bootstrap failed"),
     );
     const wrapped = new Error("setup failed", { cause: service });
-    expect(normalizeCliError(wrapped)).toMatchObject({
-      code: "SERVICE_MANAGER_FAILED",
-      message: "Could not update or start the background daemon.",
-      cause: wrapped,
-    });
+    // The declared failure is returned as-is; the outer chain stays available to
+    // --debug through renderError's explicit cause argument.
+    expect(classifyError(wrapped)).toBe(service);
     expect(
-      normalizeCliError(new UnsupportedServicePlatformError("win32")),
+      renderError(classifyError(wrapped), {
+        json: false,
+        debug: true,
+        cause: wrapped,
+        formatter: plainTerminalFormatter,
+      }),
+    ).toContain("launchctl bootstrap failed");
+    expect(
+      classifyError(new UnsupportedServicePlatformError("win32")),
     ).toMatchObject({
       code: "SERVICE_MANAGER_FAILED",
       nextSteps: ["Run agentchannels daemon in the foreground."],
     });
-    expect(normalizeCliError(new PrivilegedServiceError())).toMatchObject({
+    expect(classifyError(new PrivilegedServiceError())).toMatchObject({
       code: "SERVICE_MANAGER_FAILED",
       nextSteps: [
         "Run agentchannels daemon install as the current user, without sudo.",
@@ -115,9 +120,9 @@ describe("CLI errors", () => {
     const cause = new Error(
       'Slack SDK internal invariant failed with botToken="sdk-secret"',
     );
-    const error = normalizeCliError(cause);
+    const error = classifyError(cause);
     expect(error.code).toBe("INTERNAL_ERROR");
-    const normal = renderCliError(error, {
+    const normal = renderError(error, {
       json: false,
       debug: false,
       cause,
@@ -129,35 +134,51 @@ describe("CLI errors", () => {
 
   it("renders unknown failures generically while preserving debug diagnostics", () => {
     const cause = new Error("unexpected library detail");
-    const error = normalizeCliError(cause);
+    const error = classifyError(cause);
     expect(error).toMatchObject({
       code: "INTERNAL_ERROR",
       message: "AgentChannels hit an unexpected internal error.",
       exitCode: 1,
     });
     expect(
-      renderCliError(error, { json: false, debug: false, cause }),
+      renderError(error, { json: false, debug: false, cause }),
     ).not.toContain("library detail");
-    expect(
-      renderCliError(error, { json: false, debug: true, cause }),
-    ).toContain("unexpected library detail");
+    expect(renderError(error, { json: false, debug: true, cause })).toContain(
+      "unexpected library detail",
+    );
   });
 
-  it.each([
-    ["credential JSON was malformed", "MALFORMED_CREDENTIALS", 5],
-    ["Slack rejected the token", "PROVIDER_REJECTED", 6],
-    ["Relay enrollment failed", "RELAY_UNAVAILABLE", 7],
-    ["systemctl failed", "SERVICE_MANAGER_FAILED", 8],
-    ["input stream reached EOF", "INPUT_EOF", 9],
-  ] as const)("maps %s to %s", (message, code, exitCode) => {
-    expect(normalizeCliError(new Error(message))).toMatchObject({
-      code,
-      exitCode,
+  it("classifies by declared code, never by message wording", () => {
+    // Message text used to decide the exit code, so an unrelated failure that
+    // happened to mention a Relay or systemctl was reported as that failure.
+    for (const message of [
+      "credential JSON was malformed",
+      "Slack rejected the token",
+      "Relay enrollment failed",
+      "systemctl failed",
+      "input stream reached EOF",
+    ]) {
+      expect(classifyError(new Error(message))).toMatchObject({
+        code: "INTERNAL_ERROR",
+        exitCode: 1,
+      });
+    }
+  });
+
+  it("finds the declared failure through an untyped wrapper", () => {
+    const declared = new AgentChannelsError(
+      "RELAY_UNAVAILABLE",
+      "Relay enrollment failed.",
+      ["Retry after the Relay is reachable."],
+    );
+    const wrapped = new Error("startup failed", {
+      cause: new Error("middle", { cause: declared }),
     });
+    expect(classifyError(wrapped)).toBe(declared);
   });
 
   it("redacts provider credentials, private keys, and raw bodies", () => {
-    const value = redactSecrets(
+    const value = redactSensitiveText(
       [
         "botToken=bot-secret",
         "bearer token=bearer-secret",
@@ -191,7 +212,7 @@ describe("CLI errors", () => {
   });
 
   it("redacts modern token formats and request bodies", () => {
-    const value = redactSecrets(
+    const value = redactSensitiveText(
       [
         'apiKey="lin_api_secret"',
         'accessToken: "access-secret"',
@@ -213,11 +234,35 @@ describe("CLI errors", () => {
   });
 
   it("redacts launchd environment-style API key diagnostics", () => {
-    const redacted = redactSecrets(
+    const redacted = redactSensitiveText(
       "CLIPROXY_API_KEY => sk-syntheticLaunchdSecret123456",
     );
     expect(redacted).toContain("CLIPROXY_API_KEY => [redacted]");
     expect(redacted).not.toContain("syntheticLaunchdSecret");
+  });
+
+  it("applies one rule set to CLI output and daemon logs alike", () => {
+    // CLI output and daemon logs used separate implementations. Only the CLI one
+    // had the qualified-key rule below, so these forms reached daemon logs in
+    // clear text. Both paths must now redact them identically.
+    const sample = [
+      "token_query=underscore-secret",
+      "secret parameter: spaced-secret",
+      "authorization-query=dashed-secret",
+      'rawBody: {"message":"private channel text"}',
+    ].join(" ");
+    const direct = redactSensitiveText(sample);
+    const throughDiagnostic = redactErrorDiagnostic(new Error(sample));
+    for (const secret of [
+      "underscore-secret",
+      "spaced-secret",
+      "dashed-secret",
+      "syntheticLaunchdSecret",
+      "private channel text",
+    ]) {
+      expect(direct, "direct").not.toContain(secret);
+      expect(throughDiagnostic, "diagnostic").not.toContain(secret);
+    }
   });
 
   it("keeps nested operator diagnostics useful and redacted", () => {
@@ -234,7 +279,7 @@ describe("CLI errors", () => {
   });
 
   it("renders one human resolution and no Node stack in normal mode", () => {
-    const error = new CliError(
+    const error = new AgentChannelsError(
       "PROVIDER_REJECTED",
       "Slack rejected credentials",
       [
@@ -242,7 +287,7 @@ describe("CLI errors", () => {
         "A second step must not be shown.",
       ],
     );
-    const output = renderCliError(error, {
+    const output = renderError(error, {
       json: false,
       debug: false,
       formatter: plainTerminalFormatter,
@@ -262,8 +307,8 @@ describe("CLI errors", () => {
       "Could not update or start the background daemon.",
       cause,
     );
-    const error = normalizeCliError(serviceFailure);
-    const normal = renderCliError(error, {
+    const error = classifyError(serviceFailure);
+    const normal = renderError(error, {
       json: false,
       debug: false,
       cause: serviceFailure,
@@ -274,7 +319,7 @@ describe("CLI errors", () => {
     expect(normal).not.toContain("launchctl");
     expect(normal).not.toContain("Bootstrap failed");
 
-    const debug = renderCliError(error, {
+    const debug = renderError(error, {
       json: false,
       debug: true,
       cause: serviceFailure,
@@ -286,10 +331,10 @@ describe("CLI errors", () => {
     const cause = new Error(
       'provider failed with botToken="bot-secret" and rawBody="body-secret"',
     );
-    const error = new CliError("INTERNAL_ERROR", "provider failed", [
+    const error = new AgentChannelsError("INTERNAL_ERROR", "provider failed", [
       "Retry with botToken=resolution-secret.",
     ]);
-    const json = renderCliError(error, {
+    const json = renderError(error, {
       json: true,
       debug: true,
       cause,
@@ -300,7 +345,7 @@ describe("CLI errors", () => {
     expect(json).not.toContain("body-secret");
     expect(json).not.toContain("resolution-secret");
 
-    const debug = renderCliError(error, {
+    const debug = renderError(error, {
       json: false,
       debug: true,
       cause,
@@ -314,14 +359,14 @@ describe("CLI errors", () => {
   it("includes a safely redacted cause chain only in explicit JSON debug mode", () => {
     const root = new Error('root botToken="root-secret"');
     const cause = new Error('wrapper rawBody="body-secret"', { cause: root });
-    const error = normalizeCliError(cause);
+    const error = classifyError(cause);
     const normal = JSON.parse(
-      renderCliError(error, { json: true, debug: false, cause }),
+      renderError(error, { json: true, debug: false, cause }),
     ) as { error: Record<string, unknown> };
     expect(normal.error).not.toHaveProperty("diagnostics");
     expect(JSON.stringify(normal)).not.toContain("root-secret");
     const debug = JSON.parse(
-      renderCliError(error, { json: true, debug: true, cause }),
+      renderError(error, { json: true, debug: true, cause }),
     ) as { error: { diagnostics?: string } };
     expect(debug.error.diagnostics).toContain("root");
     expect(debug.error.diagnostics).toContain("wrapper");
@@ -330,8 +375,8 @@ describe("CLI errors", () => {
   });
 
   it("renders cancellation as a standalone human message", () => {
-    const output = renderCliError(
-      new CliError("CANCELLED", "Cancelled.", ["Rerun init."]),
+    const output = renderError(
+      new AgentChannelsError("CANCELLED", "Cancelled.", ["Rerun init."]),
       { json: false, debug: false },
     );
     expect(output).toBe("Cancelled.\n");

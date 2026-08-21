@@ -13,7 +13,7 @@ import {
   createTerminalPromptIO,
   requestPromptCancellation,
   type TerminalPromptOptions,
-} from "../src/cli/io.js";
+} from "../src/cli/io.ts";
 
 type PromptFunctions = NonNullable<TerminalPromptOptions["prompts"]>;
 
