@@ -1,10 +1,19 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const node = process.execPath;
 const root = resolve(".");
 const sourceEntry = resolve("src/cli.ts");
+
+// pnpm pack omits files that are absent, so the published-contents assertion is
+// only meaningful against a built tree. Depending on `pnpm check` happening to
+// build first hides that; build here so the test states its own precondition.
+beforeAll(() => {
+  if (!existsSync(resolve("dist/cli.js")))
+    execFileSync("pnpm", ["build"], { cwd: root, stdio: "ignore" });
+}, 120_000);
 
 describe("source and package distribution", () => {
   it("runs the TypeScript entrypoint directly with no build step or build chatter", () => {
