@@ -2,10 +2,9 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { SlackConnector } from "../src/connectors/slack.js";
-import { LinearConnector } from "../src/connectors/linear.js";
-import { createOnboardingConfiguration } from "../src/connectors/onboarding.js";
-import type { InboundRequest } from "../src/core/types.js";
+import { SlackConnector } from "../src/connectors/slack.ts";
+import { LinearConnector } from "../src/connectors/linear.ts";
+import type { InboundRequest } from "../src/model.ts";
 
 function request(
   body: string,
@@ -252,29 +251,27 @@ describe("Linear connector", () => {
   });
 });
 
-describe("onboarding", () => {
-  it("returns manifests and explicit admin actions without creating apps", () => {
+describe("onboarding artifacts", () => {
+  it("returns manifests and admin action URLs without creating apps", () => {
     const slackArtifact = new SlackConnector().createOnboardingArtifact({
       agentName: "Runbear",
       relayOrigin: "https://relay.example",
       webhookUrl: "https://relay.example/hooks",
     });
-    const slack = createOnboardingConfiguration(slackArtifact);
     const slackManifest = JSON.parse(slackArtifact.content) as {
       settings: { socket_mode_enabled: boolean };
     };
     expect(slackManifest.settings.socket_mode_enabled).toBe(false);
-    expect(slack.actionRequired.status).toBe("action_required");
+    expect(slackArtifact.actionUrl).toContain("manifest_json=");
     const linearArtifact = new LinearConnector().createOnboardingArtifact({
       agentName: "Runbear",
       relayOrigin: "https://relay.example",
       webhookUrl: "https://relay.example/hooks",
     });
-    const linear = createOnboardingConfiguration(linearArtifact);
     const linearManifest = JSON.parse(linearArtifact.content) as {
       webhook: { resourceTypes: string[] };
     };
     expect(linearManifest.webhook.resourceTypes).toEqual(["AgentSessionEvent"]);
-    expect(linear.actionRequired.url).toContain("manifest=");
+    expect(linearArtifact.actionUrl).toContain("manifest=");
   });
 });

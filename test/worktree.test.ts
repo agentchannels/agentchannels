@@ -8,7 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { WorktreeManager } from "../src/core/worktrees.js";
+import { WorktreeManager } from "../src/engine/worktrees.ts";
 
 describe("WorktreeManager", () => {
   it("creates from HEAD and preserves dirty worktrees", async () => {

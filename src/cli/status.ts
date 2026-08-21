@@ -1,8 +1,9 @@
-import type { Persistence } from "../persistence/store.js";
-import { HOSTED_RELAY_ORIGIN } from "../relay/origin.js";
-import type { ServiceStatus } from "../service/index.js";
-import { redactSecrets } from "./errors.js";
-import { plainTerminalFormatter, type TerminalFormatter } from "./format.js";
+import type { Persistence } from "../store/store.ts";
+import { HOSTED_RELAY_ORIGIN } from "../relay/origin.ts";
+import { type ServiceStatus } from "../service/types.ts";
+import { redactSensitiveText } from "../security/redact.ts";
+import { plainTerminalFormatter, type TerminalFormatter } from "./format.ts";
+import { notFound } from "../errors.ts";
 
 export type InstallationOverview = Readonly<{
   status: "uninitialized" | "ready" | "action_required" | "degraded";
@@ -22,12 +23,12 @@ export type InstallationOverview = Readonly<{
 
 function safePersistedError(value: string | null): string | null {
   if (value === null) return null;
-  return redactSecrets(value).split(/\r?\n/, 1)[0]?.trim() ?? "";
+  return redactSensitiveText(value).split(/\r?\n/, 1)[0]?.trim() ?? "";
 }
 
 function oneNextStep(value: readonly string[]): readonly string[] {
   const first = value[0];
-  return first === undefined ? [] : [redactSecrets(first)];
+  return first === undefined ? [] : [redactSensitiveText(first)];
 }
 
 export function installationOverview(
@@ -53,7 +54,9 @@ export function installationOverview(
   const explicit =
     options.agentId === undefined ? undefined : store.getAgent(options.agentId);
   if (options.agentId !== undefined && explicit === undefined)
-    throw new Error(`Agent ${options.agentId} not found`);
+    throw notFound("Agent", options.agentId, [
+      "Run agentchannels agent list and use an existing Agent ID.",
+    ]);
   const cwdCandidates = store.findAgentsByCwd(options.cwd);
   const contextual =
     explicit ?? (cwdCandidates.length === 1 ? cwdCandidates[0] : undefined);
@@ -162,7 +165,7 @@ export function renderOverview(
     lines.push("", "Waiting or failed:");
     for (const setup of value.pendingSetups) {
       lines.push(
-        `- ${setup.connector}: ${redactSecrets(setup.lastError?.trim() ? setup.lastError : setup.step)}`,
+        `- ${setup.connector}: ${redactSensitiveText(setup.lastError?.trim() ? setup.lastError : setup.step)}`,
       );
     }
   }
@@ -179,13 +182,19 @@ export function renderOverview(
             `Daemon ${value.daemon.installed ? "stopped" : value.daemon.supported ? "not installed" : "unsupported"}`,
           ),
     );
+    // The Relay does not queue events for an offline installation, so this is a
+    // silent loss window unless it is stated here.
+    if (!value.daemon.running && value.bindings.length > 0)
+      lines.push(
+        "Messages sent to a connected channel while the daemon is stopped are not delivered later.",
+      );
   }
   if (value.sessions.length > 0) {
     lines.push("", "Sessions:");
     for (const session of value.sessions)
-      lines.push(`- ${redactSecrets(session.status)}`);
+      lines.push(`- ${redactSensitiveText(session.status)}`);
   }
   if (value.actionRequired && value.nextSteps[0] !== undefined)
-    lines.push("", formatter.pending(redactSecrets(value.nextSteps[0])));
+    lines.push("", formatter.pending(redactSensitiveText(value.nextSteps[0])));
   return lines.join("\n");
 }

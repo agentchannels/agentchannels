@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CURRENT_SCHEMA_VERSION } from "../src/persistence/schema.js";
-import { Persistence } from "../src/persistence/store.js";
+import { CURRENT_SCHEMA_VERSION } from "../src/store/migrations.ts";
+import { Persistence } from "../src/store/store.ts";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -124,6 +124,65 @@ describe("local database migrations", () => {
       "/worktree/preserved",
     );
     migrated.close();
+  });
+
+  it("keeps rows that a rebuilt parent table would cascade away", () => {
+    // Migrations that rebuild a table DROP the original. With foreign key
+    // enforcement left on, that fires ON DELETE CASCADE and silently deletes
+    // every Session, grant, and delivery hanging off it.
+    const paths = fixture();
+    const initial = new Persistence(paths.database, {
+      backupDirectory: paths.backups,
+    });
+    const agent = initial.createAgent({
+      id: "ag_cascade",
+      name: "Cascade",
+      cwd: "/repository",
+    });
+    const binding = initial.createBinding({
+      id: "bd_cascade",
+      agentId: agent.id,
+      connector: "slack",
+      operatorUserId: "operator",
+      externalInstallationId: "workspace",
+    });
+    initial.grantAccess(binding.id, "alice");
+    const session = initial.createSession({
+      id: "ss_cascade",
+      bindingId: binding.id,
+      remoteConversationId: "thread",
+      cwd: "/worktree",
+      worktreePath: "/worktree",
+      baseCommit: "head",
+    });
+    initial.enqueueDelivery({
+      sessionId: session.id,
+      connector: "slack",
+      remoteConversationId: "thread",
+      kind: "final",
+      body: "done",
+    });
+    // Reopen at the current schema, forcing the rebuild migrations to run.
+    initial.db.pragma("user_version = 0");
+    initial.db.prepare("DELETE FROM schema_migrations WHERE version > 3").run();
+    initial.close();
+
+    const migrated = new Persistence(paths.database, {
+      backupDirectory: paths.backups,
+    });
+    try {
+      expect(migrated.getAgent("ag_cascade")?.name).toBe("Cascade");
+      expect(migrated.getBinding("bd_cascade")?.agentId).toBe("ag_cascade");
+      expect(migrated.listAccess("bd_cascade")).toHaveLength(1);
+      expect(migrated.getSession("ss_cascade")?.worktreePath).toBe("/worktree");
+      expect(migrated.claimDueDeliveries(10)).toHaveLength(1);
+      expect(
+        migrated.db.pragma("foreign_keys", { simple: true }) as number,
+      ).toBe(1);
+      expect(migrated.db.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      migrated.close();
+    }
   });
 
   it("refuses newer schemas before creating a backup", () => {

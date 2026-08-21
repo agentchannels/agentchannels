@@ -3,16 +3,16 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createProgram } from "../src/cli/program.js";
-import { Persistence } from "../src/persistence/store.js";
-import { RelayManager } from "../src/relay/manager.js";
-import { HOSTED_RELAY_ORIGIN, parseRelayOrigin } from "../src/relay/origin.js";
-import type { CredentialStore } from "../src/security/credentials.js";
+import { createProgram } from "../src/cli/program.ts";
+import { Persistence } from "../src/store/store.ts";
+import { RelayManager } from "../src/relay/enrollment.ts";
+import { HOSTED_RELAY_ORIGIN, parseRelayOrigin } from "../src/relay/origin.ts";
+import type { CredentialStore } from "../src/security/keyring.ts";
 import {
   BindingCredentialService,
   InstallationIdentityService,
-} from "../src/security/identity.js";
-import { PRODUCT_VERSION } from "../src/version.js";
+} from "../src/security/identity.ts";
+import { PRODUCT_VERSION } from "../src/version.ts";
 
 class MemoryCredentials implements CredentialStore {
   readonly values = new Map<string, string>();

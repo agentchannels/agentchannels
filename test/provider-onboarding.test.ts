@@ -3,11 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   LinearConnector,
   createLinearOwnedManifest,
-} from "../src/connectors/linear.js";
+} from "../src/connectors/linear.ts";
 import {
   SlackConnector,
   createSlackAppManifest,
-} from "../src/connectors/slack.js";
+} from "../src/connectors/slack.ts";
 
 describe("official provider onboarding contracts", () => {
   it.each([

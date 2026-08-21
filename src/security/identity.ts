@@ -1,3 +1,4 @@
+import { AgentChannelsError, internalError, invalidState } from "../errors.ts";
 import {
   createPrivateKey,
   generateKeyPairSync,
@@ -5,7 +6,7 @@ import {
   sign,
 } from "node:crypto";
 
-import type { CredentialStore } from "./credentials.js";
+import type { CredentialStore } from "./keyring.ts";
 
 export type IdentityFetchLike = (
   input: string | URL | Request,
@@ -41,8 +42,10 @@ export async function issueLinearClientCredentials(
     error_description?: string;
   };
   if (!response.ok || token.access_token === undefined) {
-    throw new Error(
+    throw new AgentChannelsError(
+      "PROVIDER_REJECTED",
       `Linear client-credentials authorization failed: ${token.error_description ?? `HTTP ${String(response.status)}`}`,
+      ["Rerun agentchannels init and re-enter the Linear application secrets."],
     );
   }
   return {
@@ -54,7 +57,11 @@ export async function issueLinearClientCredentials(
 }
 
 export class InstallationIdentityService {
-  public constructor(private readonly credentials: CredentialStore) {}
+  private readonly credentials: CredentialStore;
+
+  public constructor(credentials: CredentialStore) {
+    this.credentials = credentials;
+  }
 
   public async getOrCreate(): Promise<InstallationIdentity> {
     const existing = await this.credentials.get(installationMetadataKey);
@@ -66,8 +73,9 @@ export class InstallationIdentityService {
         typeof parsed.publicKeyBase64 !== "string" ||
         Buffer.from(parsed.publicKeyBase64, "base64").length !== 32
       ) {
-        throw new Error(
-          "Installation identity metadata in the OS credential store is invalid",
+        throw invalidState(
+          "Installation identity metadata in the OS credential store is invalid.",
+          ["Remove both agentchannels keyring entries, then rerun init."],
         );
       }
       return {
@@ -76,15 +84,17 @@ export class InstallationIdentityService {
       };
     }
     if (existing !== null || privateKey !== null) {
-      throw new Error(
-        "Installation identity is incomplete; remove both keyring entries before retrying",
-      );
+      throw invalidState("Installation identity is incomplete.", [
+        "Remove both agentchannels keyring entries, then rerun init.",
+      ]);
     }
 
     const pair = generateKeyPairSync("ed25519");
     const publicJwk = pair.publicKey.export({ format: "jwk" });
     if (typeof publicJwk.x !== "string")
-      throw new Error("Generated Ed25519 key is missing its public component");
+      throw internalError(
+        "Generated Ed25519 key is missing its public component.",
+      );
     const identity: InstallationIdentity = {
       installationId: `in_${randomUUID()}`,
       publicKeyBase64: Buffer.from(publicJwk.x, "base64url").toString("base64"),
@@ -113,8 +123,9 @@ export class InstallationIdentityService {
   public async signChallenge(nonce: string): Promise<string> {
     const encoded = await this.credentials.get(installationPrivateKey);
     if (encoded === null)
-      throw new Error(
-        "Installation private key is missing from the OS credential store",
+      throw invalidState(
+        "Installation private key is missing from the OS credential store.",
+        ["Rerun agentchannels init to re-enroll this installation."],
       );
     const key = createPrivateKey({
       key: Buffer.from(encoded, "base64"),
@@ -128,10 +139,13 @@ export class InstallationIdentityService {
 export class BindingCredentialService {
   private readonly fetcher: IdentityFetchLike | undefined;
 
+  private readonly credentials: CredentialStore;
+
   public constructor(
-    private readonly credentials: CredentialStore,
+    credentials: CredentialStore,
     options: Readonly<{ fetch?: IdentityFetchLike }> = {},
   ) {
+    this.credentials = credentials;
     this.fetcher = options.fetch;
   }
 
@@ -155,7 +169,9 @@ export class BindingCredentialService {
   ): Promise<Readonly<Record<string, string>>> {
     const value = await this.get(bindingId);
     if (value === null)
-      throw new Error(`Credentials for binding ${bindingId} are missing`);
+      throw invalidState(`Credentials for Binding ${bindingId} are missing.`, [
+        "Rerun agentchannels init to re-enter provider credentials.",
+      ]);
     const credentials = JSON.parse(value) as Record<string, string>;
     if (
       credentials.oauthProvider === "linear-client-credentials" &&
@@ -172,49 +188,6 @@ export class BindingCredentialService {
           this.fetcher ?? fetch,
         ),
       );
-      credentials.accessToken = credentials.apiToken ?? "";
-      await this.set(bindingId, credentials);
-    }
-    if (
-      credentials.oauthProvider === "linear" &&
-      credentials.refreshToken !== undefined &&
-      credentials.clientId !== undefined &&
-      credentials.clientSecret !== undefined &&
-      (credentials.expiresAt === undefined ||
-        Date.parse(credentials.expiresAt) <= Date.now() + 60_000)
-    ) {
-      const body = new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: credentials.refreshToken,
-        client_id: credentials.clientId,
-        client_secret: credentials.clientSecret,
-      });
-      const response = await (this.fetcher ?? fetch)(
-        "https://api.linear.app/oauth/token",
-        {
-          method: "POST",
-          headers: { "content-type": "application/x-www-form-urlencoded" },
-          body,
-        },
-      );
-      const refreshed = (await response.json()) as {
-        access_token?: string;
-        refresh_token?: string;
-        expires_in?: number;
-        error_description?: string;
-      };
-      if (!response.ok || refreshed.access_token === undefined) {
-        throw new Error(
-          `Linear OAuth refresh failed: ${refreshed.error_description ?? `HTTP ${String(response.status)}`}`,
-        );
-      }
-      credentials.apiToken = refreshed.access_token;
-      credentials.accessToken = refreshed.access_token;
-      if (refreshed.refresh_token !== undefined)
-        credentials.refreshToken = refreshed.refresh_token;
-      credentials.expiresAt = new Date(
-        Date.now() + (refreshed.expires_in ?? 86_400) * 1000,
-      ).toISOString();
       await this.set(bindingId, credentials);
     }
     return credentials;

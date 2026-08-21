@@ -8,24 +8,24 @@ import type {
   OnboardingArtifact,
   OnboardingContext,
   VerifiedConnectorCredentials,
-} from "../src/connectors/connector.js";
+} from "../src/connectors/connector.ts";
 import type {
   ConnectorType,
   DeliveryMessage,
   InboundRequest,
   RemoteUser,
-} from "../src/core/types.js";
-import { ensureProductPaths, resolveProductPaths } from "../src/core/paths.js";
-import { Persistence } from "../src/persistence/store.js";
-import { parseRelayOrigin } from "../src/relay/origin.js";
-import type { CredentialStore } from "../src/security/credentials.js";
+} from "../src/model.ts";
+import { ensureProductPaths, resolveProductPaths } from "../src/paths.ts";
+import { Persistence } from "../src/store/store.ts";
+import { parseRelayOrigin } from "../src/relay/origin.ts";
+import type { CredentialStore } from "../src/security/keyring.ts";
 import {
   BindingCredentialService,
   InstallationIdentityService,
-} from "../src/security/identity.js";
-import { CliError } from "../src/cli/errors.js";
-import type { ExternalActions, PromptIO } from "../src/cli/io.js";
-import { runInitWizard } from "../src/cli/wizard.js";
+} from "../src/security/identity.ts";
+import { AgentChannelsError } from "../src/errors.ts";
+import type { ExternalActions, PromptIO } from "../src/cli/io.ts";
+import { runInitWizard } from "../src/cli/wizard.ts";
 
 const directories: string[] = [];
 
@@ -56,7 +56,10 @@ class TestConnector implements ConnectorModule {
     }),
   );
 
-  constructor(readonly type: ConnectorType) {
+  readonly type: ConnectorType;
+
+  constructor(type: ConnectorType) {
+    this.type = type;
     this.label = type === "slack" ? "Slack" : "Linear";
     this.credentialFields =
       type === "slack"
@@ -354,7 +357,7 @@ describe("resumable first-run onboarding", () => {
   it("records the browser boundary before cancellation and resumes the same setup", async () => {
     const cancellingPrompt: PromptIO = {
       async input() {
-        throw new CliError("CANCELLED", "Cancelled.", [
+        throw new AgentChannelsError("CANCELLED", "Cancelled.", [
           "Rerun agentchannels init.",
         ]);
       },

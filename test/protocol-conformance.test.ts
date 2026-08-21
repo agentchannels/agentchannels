@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   localToRelayMessageSchema,
   relayToLocalMessageSchema,
-} from "../src/protocol/messages.js";
+} from "../src/relay/protocol.ts";
 
 type Fixture = {
   protocol: number;

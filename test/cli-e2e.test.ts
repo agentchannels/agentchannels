@@ -6,34 +6,31 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  CliError,
-  normalizeCliError,
-  renderCliError,
-} from "../src/cli/errors.js";
-import type { ExternalActions, PromptChoice, PromptIO } from "../src/cli/io.js";
-import { createProgram, type ProgramDependencies } from "../src/cli/program.js";
+import { AgentChannelsError } from "../src/errors.ts";
+import { classifyError, renderError } from "../src/cli/errors.ts";
+import type { ExternalActions, PromptChoice, PromptIO } from "../src/cli/io.ts";
+import { createProgram, type ProgramDependencies } from "../src/cli/program.ts";
 import type {
   ConnectorModule,
   OnboardingArtifact,
   OnboardingContext,
   VerifiedConnectorCredentials,
-} from "../src/connectors/connector.js";
+} from "../src/connectors/connector.ts";
 import type {
   ConnectorType,
   DeliveryMessage,
   InboundRequest,
   RemoteUser,
-} from "../src/core/types.js";
-import { Persistence } from "../src/persistence/store.js";
-import type { CredentialStore } from "../src/security/credentials.js";
-import type {
-  ServiceDefinition,
-  ServiceOperationResult,
-  ServiceStatus,
-} from "../src/service/index.js";
-import type { ServiceManager } from "../src/service/manager.js";
-import { ServiceManagerError } from "../src/service/guards.js";
+} from "../src/model.ts";
+import { Persistence } from "../src/store/store.ts";
+import type { CredentialStore } from "../src/security/keyring.ts";
+import {
+  type ServiceDefinition,
+  type ServiceOperationResult,
+  type ServiceStatus,
+} from "../src/service/types.ts";
+import type { ServiceManager } from "../src/service/manager.ts";
+import { ServiceManagerError } from "../src/service/guards.ts";
 
 const roots: string[] = [];
 
@@ -56,7 +53,10 @@ class StoryConnector implements ConnectorModule {
   readonly label: string;
   readonly credentialFields: readonly { key: string; label: string }[];
 
-  constructor(readonly type: ConnectorType) {
+  readonly type: ConnectorType;
+
+  constructor(type: ConnectorType) {
+    this.type = type;
     this.label = type === "slack" ? "Slack" : "Linear";
     this.credentialFields =
       type === "slack"
@@ -112,12 +112,22 @@ class StoryConnector implements ConnectorModule {
 class StoryPrompt implements PromptIO {
   readonly labels: string[] = [];
 
+  private readonly inputs: Array<string | Error>;
+  private readonly secrets: string[];
+  private readonly multiSelections: string[][];
+  private readonly confirmations: boolean[];
+
   constructor(
-    private readonly inputs: Array<string | Error>,
-    private readonly secrets: string[],
-    private readonly multiSelections: string[][],
-    private readonly confirmations: boolean[],
-  ) {}
+    inputs: Array<string | Error>,
+    secrets: string[],
+    multiSelections: string[][],
+    confirmations: boolean[],
+  ) {
+    this.inputs = inputs;
+    this.secrets = secrets;
+    this.multiSelections = multiSelections;
+    this.confirmations = confirmations;
+  }
 
   async input(label: string, defaultValue?: string): Promise<string> {
     this.labels.push(label);
@@ -382,7 +392,7 @@ describe("CLI end-to-end stories", () => {
     const externalLog = { artifacts: [] as string[], opened: [] as string[] };
     const external = externalActions(externalLog);
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    const cancelled = new CliError("CANCELLED", "Cancelled.", []);
+    const cancelled = new AgentChannelsError("CANCELLED", "Cancelled.", []);
 
     await expect(
       createProgram(
@@ -484,7 +494,7 @@ describe("CLI end-to-end stories", () => {
     stored.close();
     expect(externalLog.artifacts).toHaveLength(1);
 
-    const normalError = renderCliError(normalizeCliError(serviceFailure), {
+    const normalError = renderError(classifyError(serviceFailure), {
       json: false,
       debug: false,
       cause: serviceFailure,

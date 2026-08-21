@@ -8,22 +8,25 @@ import type {
   Connector,
   ConnectorCredentials,
   VerificationResult,
-} from "../src/connectors/connector.js";
-import { SlackConnector } from "../src/connectors/slack.js";
-import { SessionCoordinator } from "../src/core/session-coordinator.js";
-import type { InboundRequest, RemoteUser } from "../src/core/types.js";
-import { IngressService } from "../src/daemon/ingress-service.js";
-import type { RelayWebhook } from "../src/daemon/relay-client.js";
-import { Persistence } from "../src/persistence/index.js";
+} from "../src/connectors/connector.ts";
+import { SlackConnector } from "../src/connectors/slack.ts";
+import { SessionCoordinator } from "../src/engine/coordinator.ts";
+import type { InboundRequest, RemoteUser } from "../src/model.ts";
+import { IngressService } from "../src/engine/ingress.ts";
+import type { RelayWebhook } from "../src/relay/client.ts";
+import { Persistence } from "../src/store/store.ts";
 import type {
+  InteractionOutcome,
+  PendingInteractionState,
   Runtime,
   RuntimeEvent,
   RuntimeStartOptions,
   RuntimeResumeOptions,
   RuntimeTurn,
-} from "../src/runtime/runtime.js";
-import { BindingCredentialService } from "../src/security/identity.js";
-import type { CredentialStore } from "../src/security/credentials.js";
+} from "../src/runtimes/contract.ts";
+import { BindingCredentialCache } from "../src/security/credential-cache.ts";
+import { BindingCredentialService } from "../src/security/identity.ts";
+import type { CredentialStore } from "../src/security/keyring.ts";
 
 class MemoryCredentialStore implements CredentialStore {
   private readonly values = new Map<string, string>();
@@ -80,6 +83,24 @@ class SignedIngressConnector implements Connector {
 
 /** Runtime boundary double: enough behavior to prove ingress cannot execute forged or replayed events. */
 class ImmediateRuntime implements Runtime {
+  /** Mirrors ClaudeRuntime: approval is opt-in, questions settle in one reply. */
+  interpretResponse(
+    pending: PendingInteractionState,
+    incoming: unknown,
+  ): InteractionOutcome {
+    if (pending.kind === "question")
+      return { state: "resolved", status: "answered", response: incoming };
+    const allowed =
+      incoming === true ||
+      (typeof incoming === "string" &&
+        /^(allow|approve|approved|proceed|yes)$/i.test(incoming.trim()));
+    return {
+      state: "resolved",
+      status: allowed ? "answered" : "denied",
+      response: incoming,
+    };
+  }
+
   readonly type = "claude-code" as const;
   calls: string[] = [];
 
@@ -140,6 +161,17 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   }
 }
 
+async function primedCache(
+  store: MemoryCredentialStore,
+  bindingIds: readonly string[] = [],
+): Promise<BindingCredentialCache> {
+  const cache = new BindingCredentialCache({
+    service: new BindingCredentialService(store),
+  });
+  await cache.prime(bindingIds);
+  return cache;
+}
+
 describe("local ingress verification", () => {
   it("answers Slack URL verification for a durable pending setup before credentials or Binding activation", async () => {
     const store = new Persistence(":memory:");
@@ -153,16 +185,14 @@ describe("local ingress verification", () => {
       agentId: agent.id,
       connector: "slack",
     });
-    const credentials = new BindingCredentialService(
-      new MemoryCredentialStore(),
-    );
+    const credentials = await primedCache(new MemoryCredentialStore());
     const ingress = new IngressService({
       store,
       credentials,
       connectors: new Map([["slack", new SlackConnector()]]),
       sessions: {} as SessionCoordinator,
     });
-    const response = await ingress.handle(
+    const response = ingress.handle(
       webhook(
         "slack-verification",
         new Date().toISOString(),
@@ -218,14 +248,15 @@ describe("local ingress verification", () => {
     });
     store.grantAccess(binding.id, "alice");
     await credentialService.set(binding.id, { webhookSecret: "signed-secret" });
+    const credentialCache = await primedCache(credentials, [binding.id]);
     const coordinator = new SessionCoordinator({
       store,
-      runtime,
+      runtimes: () => runtime,
       worktreeRoot: join(directory, "worktrees"),
     });
     const ingress = new IngressService({
       store,
-      credentials: credentialService,
+      credentials: credentialCache,
       connectors: new Map([["slack", connector]]),
       sessions: coordinator,
     });
@@ -236,63 +267,53 @@ describe("local ingress verification", () => {
     });
 
     expect(
-      (
-        await ingress.handle(
-          webhook(
-            "evt-expired",
-            new Date().toISOString(),
-            "signed-secret",
-            body,
-            "bd_ingress",
-            new Date(Date.now() - 1).toISOString(),
-          ),
-        )
+      ingress.handle(
+        webhook(
+          "evt-expired",
+          new Date().toISOString(),
+          "signed-secret",
+          body,
+          "bd_ingress",
+          new Date(Date.now() - 1).toISOString(),
+        ),
       ).status,
     ).toBe(200);
 
     expect(
-      (
-        await ingress.handle(
-          webhook("evt-forged", new Date().toISOString(), "wrong-secret", body),
-        )
+      ingress.handle(
+        webhook("evt-forged", new Date().toISOString(), "wrong-secret", body),
       ).status,
     ).toBe(401);
     expect(
-      (
-        await ingress.handle(
-          webhook(
-            "evt-stale",
-            new Date(Date.now() - 120_000).toISOString(),
-            "signed-secret",
-            body,
-          ),
-        )
+      ingress.handle(
+        webhook(
+          "evt-stale",
+          new Date(Date.now() - 120_000).toISOString(),
+          "signed-secret",
+          body,
+        ),
       ).status,
     ).toBe(408);
     expect(
-      (
-        await ingress.handle(
-          webhook(
-            "evt-unauthorized",
-            new Date().toISOString(),
-            "signed-secret",
-            JSON.stringify({
-              conversation: "thread-forged-user",
-              user: "mallory",
-              text: "do not run",
-            }),
-          ),
-        )
+      ingress.handle(
+        webhook(
+          "evt-unauthorized",
+          new Date().toISOString(),
+          "signed-secret",
+          JSON.stringify({
+            conversation: "thread-forged-user",
+            user: "mallory",
+            text: "do not run",
+          }),
+        ),
       ).status,
     ).toBe(200);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(runtime.calls).toEqual([]);
 
     expect(
-      (
-        await ingress.handle(
-          webhook("evt-valid", new Date().toISOString(), "signed-secret", body),
-        )
+      ingress.handle(
+        webhook("evt-valid", new Date().toISOString(), "signed-secret", body),
       ).status,
     ).toBe(200);
     await waitUntil(() =>
@@ -300,10 +321,8 @@ describe("local ingress verification", () => {
     );
     expect(runtime.calls).toEqual(["valid task"]);
     expect(
-      (
-        await ingress.handle(
-          webhook("evt-valid", new Date().toISOString(), "signed-secret", body),
-        )
+      ingress.handle(
+        webhook("evt-valid", new Date().toISOString(), "signed-secret", body),
       ).status,
     ).toBe(200);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -332,9 +351,7 @@ describe("local ingress verification", () => {
     execFileSync("git", ["add", "README.md"], { cwd: repository });
     execFileSync("git", ["commit", "-m", "initial"], { cwd: repository });
     const store = new Persistence(":memory:");
-    const credentials = new BindingCredentialService(
-      new MemoryCredentialStore(),
-    );
+    const credentials = await primedCache(new MemoryCredentialStore());
     const runtime = new ImmediateRuntime();
     const agent = store.createAgent({
       id: "ag_offline",
@@ -354,11 +371,11 @@ describe("local ingress verification", () => {
       connectors: new Map([["slack", new SignedIngressConnector()]]),
       sessions: new SessionCoordinator({
         store,
-        runtime,
+        runtimes: () => runtime,
         worktreeRoot: join(directory, "worktrees"),
       }),
     });
-    const response = await ingress.handle(
+    const response = ingress.handle(
       webhook(
         "evt-offline",
         new Date().toISOString(),
@@ -371,9 +388,74 @@ describe("local ingress verification", () => {
         "bd_offline",
       ),
     );
-    expect(response.status).toBe(500);
+    // Unloaded credentials are a retryable local condition, not a permanent
+    // failure: the provider should send the event again rather than give up.
+    expect(response.status).toBe(503);
     expect(store.listSessions()).toEqual([]);
     expect(runtime.calls).toEqual([]);
+    store.close();
+    rmSync(directory, { recursive: true, force: true });
+  });
+  it("answers within the Relay budget without any credential I/O", async () => {
+    // The Relay drops a forwarded webhook if the local answer misses its budget
+    // and never retries, so neither the keyring nor a provider token endpoint
+    // may sit on this path. A slow credential store must not be reachable here.
+    const directory = mkdtempSync(join(tmpdir(), "agentchannels-budget-"));
+    const store = new Persistence(":memory:");
+    const backing = new MemoryCredentialStore();
+    const service = new BindingCredentialService(backing);
+    const agent = store.createAgent({
+      id: "ag_budget",
+      name: "Runbear",
+      cwd: directory,
+    });
+    const binding = store.createBinding({
+      id: "bd_budget",
+      agentId: agent.id,
+      connector: "slack",
+      operatorUserId: "operator",
+      externalInstallationId: "slack-installation",
+    });
+    await service.set(binding.id, { webhookSecret: "signed-secret" });
+
+    const cache = new BindingCredentialCache({ service });
+    await cache.prime([binding.id]);
+
+    // Any read after priming would now hang for far longer than the budget.
+    let readsAfterPriming = 0;
+    backing.get = () => {
+      readsAfterPriming += 1;
+      return new Promise<string | null>(() => undefined);
+    };
+
+    const runtime = new ImmediateRuntime();
+    const ingress = new IngressService({
+      store,
+      credentials: cache,
+      connectors: new Map([["slack", new SignedIngressConnector()]]),
+      sessions: new SessionCoordinator({
+        store,
+        runtimes: () => runtime,
+        worktreeRoot: join(directory, "worktrees"),
+      }),
+    });
+
+    const response = ingress.handle(
+      webhook(
+        "evt-budget",
+        new Date().toISOString(),
+        "signed-secret",
+        JSON.stringify({
+          conversation: "thread-budget",
+          user: "operator",
+          text: "hello",
+        }),
+        binding.id,
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(readsAfterPriming).toBe(0);
     store.close();
     rmSync(directory, { recursive: true, force: true });
   });

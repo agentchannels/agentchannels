@@ -1,0 +1,36 @@
+import { linuxServicePlatform } from "./linux.ts";
+import { macosServicePlatform } from "./macos.ts";
+import type {
+  ServicePlatformFactory,
+  ServicePlatformRegistry,
+} from "./types.ts";
+
+export class MapServicePlatformRegistry implements ServicePlatformRegistry {
+  private readonly factories = new Map<string, ServicePlatformFactory>();
+
+  constructor(factories: Iterable<ServicePlatformFactory> = []) {
+    for (const factory of factories) {
+      const platform = factory({
+        platform: "registry",
+        homeDirectory: "",
+        uid: 0,
+        serviceIdentifier: "registry",
+        fileSystem: {
+          read: async () => null,
+          write: async () => undefined,
+          mkdir: async () => undefined,
+          remove: async () => undefined,
+        },
+        runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      }).platform;
+      this.factories.set(platform, factory);
+    }
+  }
+
+  get(platform: string): ServicePlatformFactory | undefined {
+    return this.factories.get(platform);
+  }
+}
+
+export const defaultServicePlatformRegistry: ServicePlatformRegistry =
+  new MapServicePlatformRegistry([macosServicePlatform, linuxServicePlatform]);

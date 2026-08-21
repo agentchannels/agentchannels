@@ -11,18 +11,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { SessionCoordinator } from "../src/core/session-coordinator.js";
-import type { ConnectorCommand, InteractionKind } from "../src/core/types.js";
+import { SessionCoordinator } from "../src/engine/coordinator.ts";
+import type { ConnectorCommand, InteractionKind } from "../src/model.ts";
+import { ClaudeRuntime } from "../src/runtimes/claude.ts";
 import type {
+  InteractionOutcome,
+  PendingInteractionState,
   Runtime,
   RuntimeEvent,
   RuntimeInteractionRequest,
   RuntimeResumeOptions,
   RuntimeStartOptions,
   RuntimeTurn,
-} from "../src/runtime/runtime.js";
-import { Persistence } from "../src/persistence/index.js";
-import { WorktreeManager } from "../src/core/worktrees.js";
+} from "../src/runtimes/contract.ts";
+import { Persistence } from "../src/store/store.ts";
+import { WorktreeManager } from "../src/engine/worktrees.ts";
 
 type RuntimeCall = {
   method: "start" | "resume";
@@ -47,6 +50,17 @@ function deferred<T>(): Deferred<T> {
 /** Deterministic runtime double: it models only the SDK boundary and records every invocation. */
 class DeterministicRuntime implements Runtime {
   readonly type = "claude-code" as const;
+  // interpretResponse is pure and SDK-free, so the double defers to the real
+  // adapter: these tests exercise the shipped answer-accumulation rules.
+  private readonly interpreter = new ClaudeRuntime();
+
+  interpretResponse(
+    pending: PendingInteractionState,
+    incoming: unknown,
+  ): InteractionOutcome {
+    return this.interpreter.interpretResponse(pending, incoming);
+  }
+
   readonly calls: RuntimeCall[] = [];
   private readonly holds = new Map<string, Deferred<true>>();
   private nextSession = 1;
@@ -198,7 +212,7 @@ function createFixture(concurrency = 2): Fixture {
   const runtime = new DeterministicRuntime();
   const coordinator = new SessionCoordinator({
     store,
-    runtime,
+    runtimes: () => runtime,
     worktreeRoot: join(directory, "worktrees"),
     concurrency,
   });
@@ -273,6 +287,29 @@ describe("AgentChannels product flow", () => {
     ).resolves.toBe("denied");
     expect(store.listSessions()).toEqual([]);
     expect(runtime.calls).toEqual([]);
+  });
+
+  it("acknowledges a new Session before the worktree exists", async () => {
+    // Linear expects an agent activity within ten seconds of a session event, and
+    // Slack users otherwise see nothing at all. Checking out a repository and
+    // starting the runtime can take longer than that, so the first delivery is
+    // queued before any of it happens.
+    const { store, coordinator, bindingId } = createFixture();
+    const accepted = coordinator.accept(
+      bindingId,
+      message("evt-ack", "thread-ack", "alice", "investigate"),
+    );
+
+    // Queued synchronously, without waiting for worktree creation to resolve.
+    const queued = store
+      .claimDueDeliveries(10)
+      .filter((delivery) => delivery.remoteConversationId === "thread-ack");
+    expect(queued).toHaveLength(1);
+    expect(queued[0]?.kind).toBe("progress");
+    expect(queued[0]?.sessionId).toBeNull();
+    expect(store.listSessions()).toEqual([]);
+
+    expect(await accepted).toBe("accepted");
   });
 
   it("keeps the complete interaction flow local, isolated, authorized, and resumable", async () => {

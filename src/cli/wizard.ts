@@ -1,19 +1,21 @@
 import { basename, join } from "node:path";
 
-import type { ConnectorModule } from "../connectors/connector.js";
-import type { Agent, ConnectorType, RemoteUser } from "../core/types.js";
-import { RelayClient } from "../daemon/relay-client.js";
-import type { ProductPaths } from "../core/paths.js";
-import type { BindingSetup, Persistence } from "../persistence/store.js";
-import type { RelayManager } from "../relay/manager.js";
-import type { RelayEndpoints } from "../relay/origin.js";
+import type { ConnectorModule } from "../connectors/connector.ts";
+import type { Agent, ConnectorType, RemoteUser } from "../model.ts";
+import { RelayClient } from "../relay/client.ts";
+import type { ProductPaths } from "../paths.ts";
+import type { BindingSetup, Persistence } from "../store/store.ts";
+import type { RelayManager } from "../relay/enrollment.ts";
+import type { RelayEndpoints } from "../relay/origin.ts";
 import type {
   BindingCredentialService,
   InstallationIdentityService,
-} from "../security/identity.js";
-import { CliError, normalizeCliError, redactSecrets } from "./errors.js";
-import { plainTerminalFormatter, type TerminalFormatter } from "./format.js";
-import type { ExternalActions, PromptIO } from "./io.js";
+} from "../security/identity.ts";
+import { redactSensitiveText } from "../security/redact.ts";
+import { AgentChannelsError, invalidState } from "../errors.ts";
+import { classifyError } from "./errors.ts";
+import { plainTerminalFormatter, type TerminalFormatter } from "./format.ts";
+import type { ExternalActions, PromptIO } from "./io.ts";
 
 export type WizardDependencies = Readonly<{
   store: Persistence;
@@ -73,51 +75,46 @@ function selectedConnectors(
         candidate.label.toLowerCase() === item.toLowerCase(),
     );
     if (connector === undefined)
-      throw new CliError("USAGE_ERROR", `Unknown connector ${item}.`, [
-        `Choose one of: ${[...connectors.values()].map((candidate) => candidate.type).join(", ")}.`,
-      ]);
+      throw new AgentChannelsError(
+        "USAGE_ERROR",
+        `Unknown connector ${item}.`,
+        [
+          `Choose one of: ${[...connectors.values()].map((candidate) => candidate.type).join(", ")}.`,
+        ],
+      );
     if (!selected.includes(connector.type)) selected.push(connector.type);
   }
   return selected;
 }
 
-async function assertConnectorAvailability(
+/** A persisted setup may name a connector this build no longer ships. */
+function assertConnectorsExist(
   connectors: ReadonlyMap<ConnectorType, ConnectorModule>,
   selected: readonly ConnectorType[],
-): Promise<void> {
+): void {
   for (const type of selected) {
-    const connector = connectors.get(type);
-    if (connector === undefined)
-      throw new CliError("USAGE_ERROR", `Unknown connector ${type}.`, [
-        "Choose a connector offered by this installation.",
-      ]);
-    const availability = await connector.availability?.();
-    if (availability?.available === false)
-      throw new CliError("PROVIDER_REJECTED", availability.reason, [
-        `Rerun agentchannels init after ${connector.label} is available.`,
-      ]);
+    if (!connectors.has(type))
+      throw new AgentChannelsError(
+        "USAGE_ERROR",
+        `Unknown connector ${type}.`,
+        ["Choose a connector offered by this installation."],
+      );
   }
 }
 
 async function chooseConnectors(
   dependencies: WizardDependencies,
 ): Promise<ConnectorType[]> {
-  const available: ConnectorModule[] = [];
-  for (const connector of dependencies.connectors.values()) {
-    const status = await connector.availability?.();
-    if (status?.available === false) continue;
-    available.push(connector);
-  }
   const skip = "__local_only__";
   const values = await dependencies.prompt.multiSelect("Connect a channel", [
-    ...available.map((connector) => ({
+    ...[...dependencies.connectors.values()].map((connector) => ({
       value: connector.type,
       label: connector.label,
     })),
     { value: skip, label: "Skip", description: "Initialize local-only" },
   ]);
   if (values.includes(skip) && values.length > 1)
-    throw new CliError(
+    throw new AgentChannelsError(
       "USAGE_ERROR",
       "Skip cannot be combined with a connector.",
       ["Choose Skip for local-only setup, or select one or more connectors."],
@@ -142,12 +139,18 @@ async function chooseOperator(
     `Search for the ${connector.label} Operator by name or email`,
   );
   if (!query)
-    throw new CliError("INPUT_EOF", "An Operator search is required.", [
-      "Rerun agentchannels init and search by your name or email.",
-    ]);
+    throw new AgentChannelsError(
+      "INPUT_EOF",
+      "An Operator search is required.",
+      ["Rerun agentchannels init and search by your name or email."],
+    );
   const users = await connector.searchUsers(query, credentials);
   if (users.length === 0)
-    throw new Error(`${connector.label} returned no matching Operator`);
+    throw new AgentChannelsError(
+      "PROVIDER_REJECTED",
+      `${connector.label} returned no matching Operator.`,
+      ["Search again with the name or email of a workspace member."],
+    );
   if (users.length === 1 && users[0] !== undefined) return users[0];
   return dependencies.prompt.select(
     "Operator",
@@ -235,7 +238,9 @@ async function processSetup(
 ): Promise<SetupAction> {
   const connector = dependencies.connectors.get(initial.connector);
   if (connector === undefined)
-    throw new Error(`Connector ${initial.connector} is unavailable`);
+    throw invalidState(`Connector ${initial.connector} is unavailable.`, [
+      "Reinstall AgentChannels with the connector this setup uses.",
+    ]);
   let setup = dependencies.store.getBindingSetup(initial.id) ?? initial;
   const artifact = connector.createOnboardingArtifact({
     agentName: agent.name,
@@ -307,7 +312,7 @@ async function processSetup(
     for (const field of connector.credentialFields) {
       const value = await dependencies.prompt.secret(field.label);
       if (!value)
-        throw new CliError(
+        throw new AgentChannelsError(
           "MALFORMED_CREDENTIALS",
           `${field.label} is required.`,
           ["Rerun agentchannels init to resume credential entry."],
@@ -343,7 +348,10 @@ async function processSetup(
     );
     const externalInstallationId = setup.externalInstallationId;
     if (!externalInstallationId)
-      throw new Error(`${connector.label} workspace discovery is incomplete`);
+      throw invalidState(
+        `${connector.label} workspace discovery is incomplete.`,
+        ["Rerun agentchannels init to re-enter provider credentials."],
+      );
     try {
       dependencies.store.completeBindingSetup(setup.id, {
         operatorUserId: operator.id,
@@ -394,7 +402,7 @@ export async function runInitWizard(
         : input.connectorTypes.flatMap((value) =>
             selectedConnectors(value, dependencies.connectors),
           );
-    await assertConnectorAvailability(dependencies.connectors, requested);
+    assertConnectorsExist(dependencies.connectors, requested);
     agent = dependencies.store.transaction(() => {
       const created = dependencies.store.createAgent({
         name,
@@ -414,7 +422,7 @@ export async function runInitWizard(
     requested = input.connectorTypes.flatMap((value) =>
       selectedConnectors(value, dependencies.connectors),
     );
-    await assertConnectorAvailability(dependencies.connectors, requested);
+    assertConnectorsExist(dependencies.connectors, requested);
     const completed = new Set(
       dependencies.store
         .listBindings(agent.id)
@@ -439,12 +447,13 @@ export async function runInitWizard(
         connectorOrder.indexOf(left.connector) -
         connectorOrder.indexOf(right.connector),
     );
-  await assertConnectorAvailability(
+  assertConnectorsExist(
     dependencies.connectors,
     pending.map((setup) => setup.connector),
   );
+  const formatter = dependencies.formatter ?? plainTerminalFormatter;
   dependencies.write(
-    `${(dependencies.formatter ?? plainTerminalFormatter).success("Git repository detected")}\n${(dependencies.formatter ?? plainTerminalFormatter).success("Claude Code runtime detected")}\n${(dependencies.formatter ?? plainTerminalFormatter).success(`Agent ${agent.name} configured`)}\n`,
+    `${formatter.success(`Agent ${agent.name} configured`)}\n`,
   );
   if (pending.length === 0) {
     if (dependencies.store.listBindings(agent.id).length > 0)
@@ -462,27 +471,28 @@ export async function runInitWizard(
   try {
     endpoints = await dependencies.relay.ensureHosted();
   } catch (error) {
-    throw new CliError(
+    throw new AgentChannelsError(
       "RELAY_UNAVAILABLE",
-      `Relay enrollment failed: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
+      `Relay enrollment failed: ${redactSensitiveText(error instanceof Error ? error.message : String(error))}`,
       ["Retry agentchannels init after the hosted Relay is available."],
       { cause: error },
     );
   }
 
   const actions: SetupAction[] = [];
-  const failures: CliError[] = [];
+  const failures: { connector: ConnectorType; error: AgentChannelsError }[] =
+    [];
   for (const setup of pending) {
     try {
       actions.push(await processSetup(dependencies, agent, setup, endpoints));
     } catch (error) {
-      const normalized = normalizeCliError(error);
+      const normalized = classifyError(error);
       if (normalized.code === "INPUT_EOF" || normalized.code === "CANCELLED")
         throw normalized;
       dependencies.store.updateBindingSetup(setup.id, {
         lastError: normalized.message,
       });
-      failures.push(normalized);
+      failures.push({ connector: setup.connector, error: normalized });
       actions.push({
         connector: setup.connector,
         status: "failed",
@@ -510,9 +520,7 @@ export async function runInitWizard(
     actionRequired,
     nextSteps: actionRequired
       ? [
-          failures[0] === undefined
-            ? `Rerun agentchannels init to resume ${remaining[0]?.connector ?? "provider"} setup.`
-            : `Rerun agentchannels init to retry ${failures[0].message}.`,
+          `Rerun agentchannels init to ${failures[0] === undefined ? "resume" : "retry"} ${failures[0]?.connector ?? remaining[0]?.connector ?? "provider"} setup.`,
         ]
       : [],
     agent,
@@ -521,8 +529,8 @@ export async function runInitWizard(
       ? {}
       : {
           error: {
-            code: failures[0].code,
-            message: failures[0].message,
+            code: failures[0].error.code,
+            message: failures[0].error.message,
           },
         }),
   };

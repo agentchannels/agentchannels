@@ -10,7 +10,7 @@ Connector credentials and the installation private key are stored in the operati
 
 ## Requirements
 
-- Node.js 22 or newer
+- Node.js 22 or newer to run AgentChannels (Node.js 24 or newer to develop it)
 - pnpm
 - A Git repository with a current `HEAD`
 - Local Claude Code authentication and configuration
@@ -84,8 +84,14 @@ agentchannels daemon
 - `agentchannels users search <query>` finds stable provider user IDs.
 - `agentchannels status` shows global Agent, Binding, setup, and Session state.
 - `agentchannels sessions retire` safely retires a retained Session.
+- `agentchannels sessions prune` sweeps every expired Session on demand.
 - `agentchannels daemon` runs in the foreground; `daemon install|start|restart|stop|status|uninstall`
   manages a macOS LaunchAgent or Linux systemd user service.
+
+The Relay forwards provider events to the running local daemon and does not hold
+them for later. Messages sent to a connected channel while the daemon is stopped
+are dropped rather than queued, so install the background daemon if you want an
+Agent to be reachable continuously.
 
 Add `--json` to supported commands for machine-readable output. Use `--agent ag_...` when the current directory does not identify one Agent.
 

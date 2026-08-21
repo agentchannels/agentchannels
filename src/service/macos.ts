@@ -5,14 +5,14 @@ import {
   logDirectory,
   serviceName,
   xmlEscape,
-} from "./format.js";
-import { assertExpectedServiceExit } from "./guards.js";
+} from "./definition.ts";
+import { assertExpectedServiceExit } from "./guards.ts";
 import type {
   ServiceDefinition,
   ServiceOperationResult,
   ServicePlatformFactory,
   ServiceStatus,
-} from "./types.js";
+} from "./types.ts";
 
 const MACOS_PLATFORM = "darwin" as NodeJS.Platform;
 

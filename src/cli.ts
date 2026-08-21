@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 
-import { normalizeCliError, renderCliError } from "./cli/errors.js";
-import { createTerminalFormatter } from "./cli/format.js";
-import { hasActivePrompt, requestPromptCancellation } from "./cli/io.js";
-import { createProgram } from "./cli/program.js";
+import { classifyError, renderError } from "./cli/errors.ts";
+import { createTerminalFormatter } from "./cli/format.ts";
+import { hasActivePrompt, requestPromptCancellation } from "./cli/io.ts";
+import { createProgram } from "./cli/program.ts";
+
+// `pnpm start -- init` forwards the separator verbatim. Drop it here so running
+// from a package script and running the installed binary parse identically.
+if (process.argv[2] === "--") process.argv.splice(2, 1);
 
 function requestedCommand(
   program: ReturnType<typeof createProgram>,
@@ -53,12 +57,12 @@ try {
     process.exitCode = 0;
   } else {
     const command = requestedCommand(program);
-    const error = normalizeCliError(
+    const error = classifyError(
       cause,
       command === undefined ? {} : { command },
     );
     const json = process.argv.includes("--json");
-    const rendered = renderCliError(error, {
+    const rendered = renderError(error, {
       json,
       debug: process.argv.includes("--debug"),
       cause,

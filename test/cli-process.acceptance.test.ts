@@ -1,46 +1,17 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { Persistence } from "../src/persistence/store.js";
+import { Persistence } from "../src/store/store.ts";
+import { cleanupFixtures, repositoryFixture } from "./helpers/fixtures.ts";
 
-const roots: string[] = [];
 const node = process.execPath;
 const cli = resolve("dist/cli.js");
-const sourceRunner = resolve("scripts/start.mjs");
+const sourceRunner = resolve("src/cli.ts");
 
-beforeAll(() => {
-  execFileSync(node, [sourceRunner, "--version"], { stdio: "ignore" });
-}, 60_000);
-
-function repository(withHead = true) {
-  const root = mkdtempSync(join(tmpdir(), "agentchannels-cli-process-"));
-  roots.push(root);
-  const cwd = join(root, "repository");
-  const home = join(root, "home");
-  execFileSync("git", ["init", "--initial-branch", "main", cwd], {
-    stdio: "ignore",
-  });
-  if (withHead) {
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=AgentChannels Test",
-        "-c",
-        "user.email=test@example.invalid",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "initial",
-      ],
-      { cwd, stdio: "ignore" },
-    );
-  }
-  return { root, cwd, home };
-}
+const repository = (withHead = true) =>
+  repositoryFixture(withHead ? {} : { withHead: false });
 
 function run(args: string[], cwd?: string, input?: string) {
   return spawnSync(node, [cli, ...args], {
@@ -60,10 +31,7 @@ function runSource(args: string[]) {
   });
 }
 
-afterEach(() => {
-  for (const root of roots.splice(0))
-    rmSync(root, { recursive: true, force: true });
-});
+afterEach(cleanupFixtures);
 
 describe("CLI process boundary", () => {
   it("treats version and help display as successful output", () => {
@@ -347,6 +315,44 @@ sys.exit(os.waitstatus_to_exitcode(status))
       store.close();
     },
   );
+
+  it("sweeps expired Sessions without a running daemon", () => {
+    // Retention only ran inside the daemon process, so an installation whose
+    // daemon was stopped accumulated Session worktrees with no way to clear them.
+    const fixture = repository();
+    expect(
+      run(["--home", fixture.home, "--json", "init", "--cwd", fixture.cwd])
+        .status,
+    ).toBe(0);
+
+    const result = run(["--home", fixture.home, "--json", "sessions", "prune"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      status: "ready",
+      removed: 0,
+      preservedDirty: 0,
+    });
+
+    const human = run(["--home", fixture.home, "sessions", "prune"]);
+    expect(human.status).toBe(0);
+    expect(human.stdout).toContain("No expired Sessions to prune");
+  }, 60_000);
+
+  it("reports a bad option value as a usage error, not an internal error", () => {
+    // The value reached the coordinator and threw a plain Error, which no message
+    // pattern matched, so an operator typo was reported as an internal defect.
+    const fixture = repository();
+    const result = run([
+      "--home",
+      fixture.home,
+      "daemon",
+      "--concurrency",
+      "abc",
+    ]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--concurrency");
+    expect(result.stderr).not.toContain("unexpected internal error");
+  });
 
   it.runIf(process.platform !== "win32")(
     "does not mistake an option value named daemon for the foreground command",

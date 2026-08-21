@@ -1,18 +1,26 @@
-export * from "./connectors/connector.js";
-export * from "./connectors/linear.js";
-export * from "./connectors/onboarding.js";
-export * from "./connectors/slack.js";
-export * from "./core/delivery-worker.js";
-export * from "./core/session-coordinator.js";
-export * from "./core/session-state.js";
-export * from "./core/types.js";
-export * from "./core/worktrees.js";
-export * from "./persistence/index.js";
-export * from "./protocol/messages.js";
-export * from "./relay/manager.js";
-export * from "./relay/origin.js";
-export * from "./runtime/claude.js";
-export * from "./runtime/runtime.js";
-export * from "./security/credentials.js";
-export * from "./security/identity.js";
-export * from "./version.js";
+/**
+ * The public library surface.
+ *
+ * This is the only barrel in the tree: everything else imports the module that
+ * owns a symbol, so the dependency graph stays readable. Adding an export here
+ * makes it a compatibility commitment.
+ */
+export * from "./connectors/connector.ts";
+export * from "./connectors/http.ts";
+export * from "./connectors/linear.ts";
+export * from "./connectors/slack.ts";
+export * from "./engine/coordinator.ts";
+export * from "./engine/deliveries.ts";
+export * from "./engine/worktrees.ts";
+export * from "./errors.ts";
+export * from "./model.ts";
+export * from "./paths.ts";
+export * from "./relay/enrollment.ts";
+export * from "./relay/origin.ts";
+export * from "./relay/protocol.ts";
+export * from "./runtimes/claude.ts";
+export * from "./runtimes/contract.ts";
+export * from "./security/identity.ts";
+export * from "./security/keyring.ts";
+export * from "./store/store.ts";
+export * from "./version.ts";

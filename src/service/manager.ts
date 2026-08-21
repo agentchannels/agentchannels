@@ -4,22 +4,22 @@ import {
   defaultHomeDirectory,
   nodeCommandRunner,
   nodeFileSystem,
-} from "./io.js";
+} from "./io.ts";
 import {
   assertUserServiceMutation,
   PrivilegedServiceError,
   ServiceManagerError,
   UnsupportedServicePlatformError,
-} from "./guards.js";
-import { defaultServicePlatformRegistry } from "./registry.js";
-import { scopedServiceName } from "./format.js";
+} from "./guards.ts";
+import { defaultServicePlatformRegistry } from "./platforms.ts";
+import { scopedServiceName } from "./definition.ts";
 import type {
   ServiceDefinition,
   ServiceManagerOptions,
   ServiceOperationResult,
   ServicePlatformAdapter,
   ServiceStatus,
-} from "./types.js";
+} from "./types.ts";
 
 function currentUid(): number {
   return typeof process.getuid === "function" ? process.getuid() : -1;

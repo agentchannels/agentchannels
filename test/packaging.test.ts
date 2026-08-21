@@ -1,41 +1,31 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const node = process.execPath;
 const root = resolve(".");
-const sourceRunner = resolve("scripts/start.mjs");
-const buildLock = resolve(".agentchannels-build.lock");
+const sourceEntry = resolve("src/cli.ts");
 
+// pnpm pack omits files that are absent, so the published-contents assertion is
+// only meaningful against a built tree. Depending on `pnpm check` happening to
+// build first hides that; build here so the test states its own precondition.
 beforeAll(() => {
-  execFileSync(node, [sourceRunner, "--version"], {
-    cwd: root,
-    stdio: "ignore",
-  });
-}, 60_000);
+  if (!existsSync(resolve("dist/cli.js")))
+    execFileSync("pnpm", ["build"], { cwd: root, stdio: "ignore" });
+}, 120_000);
 
 describe("source and package distribution", () => {
-  it("recovers a stale source-build lock without polluting CLI output", () => {
-    rmSync(buildLock, { recursive: true, force: true });
-    mkdirSync(buildLock);
-    writeFileSync(join(buildLock, "pid"), "0");
-
-    try {
-      const result = spawnSync(node, [sourceRunner, "--help"], {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, NO_COLOR: "1" },
-        timeout: 60_000,
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toMatch(/^Usage: agentchannels/m);
-      expect(result.stdout).not.toMatch(/CLI Building|ESM Build|DTS Build/);
-      expect(existsSync(buildLock)).toBe(false);
-    } finally {
-      rmSync(buildLock, { recursive: true, force: true });
-    }
+  it("runs the TypeScript entrypoint directly with no build step or build chatter", () => {
+    const result = spawnSync(node, [sourceEntry, "--help"], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1" },
+      timeout: 60_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toMatch(/^Usage: agentchannels/m);
   });
 
   it("publishes only the built CLI, public entrypoint, and restore helper", () => {
@@ -61,8 +51,8 @@ describe("source and package distribution", () => {
       expect.arrayContaining([
         "src/cli.ts",
         "test/cli-process.acceptance.test.ts",
-        ".agentchannels-build.lock",
       ]),
     );
-  });
+    // Packing runs the real packer over the whole tree and is slow under load.
+  }, 90_000);
 });
