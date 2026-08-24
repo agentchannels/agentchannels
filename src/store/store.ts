@@ -10,6 +10,7 @@ import type {
   Interaction,
   InteractionKind,
   InteractionStatus,
+  RuntimeType,
   Session,
   SessionStatus,
 } from "../model.ts";
@@ -32,6 +33,7 @@ import {
   mapFollowUp,
   mapInteraction,
   mapSession,
+  parseJson,
   required,
   type AccessGrant,
   type BindingSetup,
@@ -156,6 +158,36 @@ export class Persistence {
   findAgentByExactCwd(cwd: string): Agent | undefined {
     const target = resolve(cwd);
     return this.listAgents().find((agent) => resolve(agent.cwd) === target);
+  }
+
+  /**
+   * Runtime-owned state for one Agent, stored and returned verbatim.
+   *
+   * The blob is written by a runtime adapter and read back by the same adapter.
+   * Nothing between the two may interpret it: a Claude permission rule has no
+   * counterpart in another runtime, so a shape the core understood here would be
+   * a shape every future runtime had to adopt.
+   */
+  getAgentRuntimeState(agentId: string, runtime: RuntimeType): unknown {
+    const row = this.db
+      .prepare(
+        "SELECT state_json FROM agent_runtime_state WHERE agent_id=? AND runtime=?",
+      )
+      .get(agentId, runtime) as { state_json: string } | undefined;
+    return row === undefined ? null : parseJson(row.state_json);
+  }
+  setAgentRuntimeState(
+    agentId: string,
+    runtime: RuntimeType,
+    state: unknown,
+    at = new Date(),
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO agent_runtime_state(agent_id,runtime,state_json,updated_at) VALUES (?,?,?,?)
+         ON CONFLICT(agent_id,runtime) DO UPDATE SET state_json=excluded.state_json, updated_at=excluded.updated_at`,
+      )
+      .run(agentId, runtime, json(state), iso(at));
   }
 
   createInstallation(input: {

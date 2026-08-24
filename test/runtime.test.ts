@@ -5,6 +5,7 @@ import type {
   SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeRuntime } from "../src/runtimes/claude.ts";
+import type { RuntimeInteractionRequest } from "../src/runtimes/contract.ts";
 
 function fakeQuery(messages: SDKMessage[]): Query {
   const iterator = (async function* (): AsyncIterable<SDKMessage> {
@@ -51,6 +52,7 @@ describe("ClaudeRuntime", () => {
       cwd: "/repo/worktree",
       additionalDirectories: [],
       prompt: "hello",
+      runtimeState: null,
       requestInteraction: vi.fn(),
     });
     const events: unknown[] = [];
@@ -69,6 +71,7 @@ describe("ClaudeRuntime", () => {
       cwd: "/repo/worktree",
       additionalDirectories: [],
       prompt: "hello",
+      runtimeState: null,
       requestInteraction: vi.fn(),
     });
     const events: unknown[] = [];
@@ -96,6 +99,7 @@ describe("ClaudeRuntime", () => {
       cwd: "/repo/worktree",
       additionalDirectories: ["/shared"],
       prompt: "hello",
+      runtimeState: null,
       requestInteraction: vi.fn(),
     });
 
@@ -130,6 +134,7 @@ describe("ClaudeRuntime", () => {
       additionalDirectories: [],
       prompt: "continue",
       runtimeSessionId: "runtime-1",
+      runtimeState: null,
       requestInteraction,
     });
     expect(captured?.resume).toBe("runtime-1");
@@ -153,29 +158,189 @@ describe("ClaudeRuntime", () => {
     );
   });
 
-  it("settles permission replies with one predicate, not two", () => {
-    // The coordinator classified replies with a deny-word list while the adapter
-    // classified them with an allow-word list. Anything in neither list, such as
-    // "sure", was persisted as answered but refused as a tool call.
+  it("reads a permission reply as an approval, a refusal, or neither", () => {
+    // One predicate settles both sides: the coordinator used to classify replies
+    // with a deny-word list while the adapter used an allow-word list, so a
+    // reply in neither was persisted as answered and refused as a tool call.
+    // The third branch is what a reply in neither list gets now. Turning it into
+    // a denial is what made an operator think they had approved something.
     const runtime = new ClaudeRuntime();
     const permission = {
       kind: "permission" as const,
-      request: {},
+      request: { title: "Claude wants to use Bash" },
       progress: undefined,
+      runtimeState: null,
     };
 
-    for (const reply of ["allow", "yes", "Proceed", true]) {
-      expect(runtime.interpretResponse(permission, reply)).toMatchObject({
-        state: "resolved",
-        status: "answered",
-      });
+    for (const reply of ["allow", "yes", "Proceed", "ok", "ㅇㅇ", "네", true]) {
+      expect(
+        runtime.interpretResponse(permission, reply),
+        JSON.stringify(reply),
+      ).toMatchObject({ state: "resolved", status: "answered" });
     }
-    for (const reply of ["deny", "no", "sure", "maybe", "", false, {}]) {
+    for (const reply of ["deny", "no", "cancel", "아니요", "ㄴㄴ", false]) {
       expect(
         runtime.interpretResponse(permission, reply),
         JSON.stringify(reply),
       ).toMatchObject({ state: "resolved", status: "denied" });
     }
+    for (const reply of [
+      "maybe",
+      "",
+      "no, run it with sudo instead",
+      "why does it need that?",
+      {},
+    ]) {
+      const outcome = runtime.interpretResponse(permission, reply);
+      expect(outcome.state, JSON.stringify(reply)).toBe("unresolved");
+      if (outcome.state !== "unresolved") throw new Error("expected a re-ask");
+      expect(outcome.body).toContain("Claude wants to use Bash");
+    }
+  });
+
+  it("shows the command being approved and offers the sticky choice", async () => {
+    // The request used to travel as the tool input on one JSON line, and Linear
+    // posts the body alone, so an approval showed a tool name and nothing else.
+    let captured: Options | undefined;
+    const requestInteraction = vi.fn((_request: RuntimeInteractionRequest) =>
+      Promise.resolve({ status: "denied" as const, response: "deny" }),
+    );
+    const sdkQuery = vi.fn((params: { options?: Options }) => {
+      captured = params.options;
+      return fakeQuery([]);
+    });
+    new ClaudeRuntime(sdkQuery as never).start({
+      cwd: "/repo/worktree",
+      additionalDirectories: [],
+      prompt: "check the vault",
+      runtimeState: null,
+      requestInteraction,
+    });
+    await captured?.canUseTool?.(
+      "Bash",
+      { command: "op whoami" },
+      {
+        signal: new AbortController().signal,
+        toolUseID: "tool-1",
+        requestId: "request-1",
+        title: "Claude wants to use Bash",
+        suggestions: [
+          {
+            type: "addRules",
+            rules: [{ toolName: "Bash", ruleContent: "op whoami *" }],
+            behavior: "allow",
+            destination: "localSettings",
+          },
+        ],
+      },
+    );
+
+    const request = requestInteraction.mock.calls[0]?.[0];
+    const options = (request?.data.options ?? []) as {
+      label: string;
+      value: string;
+    }[];
+    expect(request?.body).toContain("Claude wants to use Bash");
+    expect(request?.body).toContain("```sh\nop whoami\n```");
+    expect(options.map((option) => option.value)).toEqual([
+      "allow",
+      "allow_always",
+      "deny",
+    ]);
+    // No styling exists on either channel, so the label is the only warning.
+    for (const option of options)
+      expect(option.label.split(" ").length).toBeGreaterThan(1);
+    expect(options[1]?.label).toContain("Bash(op whoami *)");
+  });
+
+  it("omits the sticky choice when the SDK proposed no rule", async () => {
+    let captured: Options | undefined;
+    const requestInteraction = vi.fn((_request: RuntimeInteractionRequest) =>
+      Promise.resolve({ status: "denied" as const, response: "deny" }),
+    );
+    const sdkQuery = vi.fn((params: { options?: Options }) => {
+      captured = params.options;
+      return fakeQuery([]);
+    });
+    new ClaudeRuntime(sdkQuery as never).start({
+      cwd: "/repo/worktree",
+      additionalDirectories: [],
+      prompt: "read it",
+      runtimeState: null,
+      requestInteraction,
+    });
+    await captured?.canUseTool?.(
+      "Read",
+      { file_path: "/repo/worktree/a.ts" },
+      {
+        signal: new AbortController().signal,
+        toolUseID: "tool-2",
+        requestId: "request-2",
+      },
+    );
+    const options = (requestInteraction.mock.calls[0]?.[0].data.options ??
+      []) as { value: string }[];
+    expect(options.map((option) => option.value)).toEqual(["allow", "deny"]);
+  });
+
+  it("returns the SDK's own rule and keeps it for the Agent when made sticky", () => {
+    const suggestion = {
+      type: "addRules",
+      rules: [{ toolName: "Bash", ruleContent: "op whoami *" }],
+      behavior: "allow",
+      destination: "localSettings",
+    };
+    const outcome = new ClaudeRuntime().interpretResponse(
+      {
+        kind: "permission",
+        request: {
+          title: "Claude wants to use Bash",
+          data: { suggestions: [suggestion] },
+        },
+        progress: undefined,
+        runtimeState: null,
+      },
+      "allow_always",
+    );
+    expect(outcome).toMatchObject({
+      state: "resolved",
+      status: "answered",
+      // Handed back verbatim: the destination is the SDK's to choose.
+      response: { updatedPermissions: [suggestion] },
+      runtimeState: { permissionRules: [suggestion] },
+    });
+  });
+
+  it("replays stored rules through settings without inheriting less", async () => {
+    // The advantage this product has is that it omits settingSources, env, and
+    // mcpServers, so the SDK loads the operator's real environment. That is a
+    // default rather than a decision, and one added key would end it silently.
+    let captured: Options | undefined;
+    const sdkQuery = vi.fn((params: { options?: Options }) => {
+      captured = params.options;
+      return fakeQuery([resultMessage("done")]);
+    });
+    new ClaudeRuntime(sdkQuery as never).start({
+      cwd: "/repo/worktree",
+      additionalDirectories: [],
+      prompt: "again",
+      runtimeState: {
+        permissionRules: [
+          {
+            type: "addRules",
+            rules: [{ toolName: "Bash", ruleContent: "op whoami *" }],
+            behavior: "allow",
+            destination: "localSettings",
+          },
+        ],
+      },
+      requestInteraction: vi.fn(),
+    });
+    expect(captured?.settings).toEqual({
+      permissions: { allow: ["Bash(op whoami *)"] },
+    });
+    for (const key of ["settingSources", "env", "mcpServers"])
+      expect(Object.hasOwn(captured ?? {}, key), key).toBe(false);
   });
 
   it("keeps a multi-part question partial until every part is answered", () => {
@@ -188,6 +353,7 @@ describe("ClaudeRuntime", () => {
         },
       },
       progress: undefined as unknown,
+      runtimeState: null,
     };
 
     const first = runtime.interpretResponse(pending, {
@@ -225,6 +391,7 @@ describe("ClaudeRuntime", () => {
       cwd: "/repo/session",
       additionalDirectories: [],
       prompt: "plan this",
+      runtimeState: null,
       requestInteraction: () =>
         Promise.resolve({
           status: "denied" as const,

@@ -77,28 +77,202 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function safeJson(value: unknown, space?: number): string {
+  try {
+    return JSON.stringify(value, null, space) ?? "";
+  } catch {
+    return "Unserializable interaction input";
+  }
+}
+
+/** The option values this adapter offers for a permission request. */
+const ALLOW_ONCE = "allow";
+const ALLOW_ALWAYS = "allow_always";
+const DENY = "deny";
+
+/** Long enough to hold a real command, short enough that a file body cannot flood a channel. */
+const FENCE_LIMIT = 1500;
+const PARAMETER_LIMIT = 200;
+
+function truncate(value: string, limit: number): string {
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`;
+}
+
 /**
- * Whether a reply approves a permission or plan request.
+ * The suggestions this adapter is willing to make sticky.
  *
- * Approval is opt-in: anything not recognised as an approval is a denial. The
- * coordinator used to classify replies separately with a deny-word list, which
- * meant an unrecognised reply such as "sure" was recorded as answered while this
- * adapter refused the tool. One predicate now settles both.
+ * Only rules the SDK itself proposed, and only permissive ones. Nothing here
+ * composes a rule, widens one, or rewrites the destination it came with.
  */
-function allowResult(response: unknown): boolean {
+function stickySuggestions(suggestions: unknown): PermissionUpdate[] {
+  if (!Array.isArray(suggestions)) return [];
+  return suggestions.filter((suggestion): suggestion is PermissionUpdate => {
+    const record = asRecord(suggestion);
+    return (
+      record.type === "addRules" &&
+      record.behavior === "allow" &&
+      Array.isArray(record.rules) &&
+      record.rules.length > 0
+    );
+  });
+}
+
+/** One rule in the `Tool(content)` spelling that `Settings.permissions` uses. */
+function ruleText(rule: unknown): string {
+  const record = asRecord(rule);
+  const toolName = typeof record.toolName === "string" ? record.toolName : "";
+  if (toolName === "") return "";
+  return typeof record.ruleContent === "string" && record.ruleContent !== ""
+    ? `${toolName}(${record.ruleContent})`
+    : toolName;
+}
+
+function ruleTexts(updates: readonly PermissionUpdate[]): string[] {
+  return updates.flatMap((update) =>
+    "rules" in update
+      ? update.rules.map(ruleText).filter((text) => text !== "")
+      : [],
+  );
+}
+
+/**
+ * Rules this Agent has already made sticky.
+ *
+ * The stored blob is revalidated on the way out rather than trusted, so a row
+ * written by an older build degrades to "no rules" instead of reaching the SDK
+ * as a malformed permission update.
+ */
+function storedRules(state: unknown): PermissionUpdate[] {
+  return stickySuggestions(asRecord(state).permissionRules);
+}
+
+function mergeStoredRules(
+  state: unknown,
+  granted: readonly PermissionUpdate[],
+): { permissionRules: PermissionUpdate[] } {
+  const kept = storedRules(state);
+  const seen = new Set(kept.map((update) => safeJson(update)));
+  for (const update of granted) {
+    const key = safeJson(update);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(update);
+  }
+  return { permissionRules: kept };
+}
+
+function permissionAllowRules(state: unknown): string[] {
+  return [...new Set(ruleTexts(storedRules(state)))];
+}
+
+/** What a channel reply says about a permission request, including "nothing I can read". */
+type PermissionVerdict = "allow" | "allow_always" | "deny" | "unclear";
+
+const APPROVES = new Set([
+  "allow",
+  "approve",
+  "approved",
+  "proceed",
+  "yes",
+  "y",
+  "ok",
+  "okay",
+  "sure",
+  "go ahead",
+  "do it",
+  "continue",
+  "승인",
+  "허용",
+  "네",
+  "넵",
+  "예",
+  "응",
+  "그래",
+  "좋아",
+  "좋아요",
+  "해줘",
+  "진행",
+  "ㅇㅇ",
+  "ㅇㅋ",
+  "ㄱㄱ",
+]);
+
+const REFUSES = new Set([
+  "deny",
+  "denied",
+  "decline",
+  "declined",
+  "no",
+  "n",
+  "nope",
+  "stop",
+  "cancel",
+  "don't",
+  "dont",
+  "do not",
+  "거부",
+  "거절",
+  "아니",
+  "아니오",
+  "아니요",
+  "아뇨",
+  "안돼",
+  "안됨",
+  "하지마",
+  "하지 마",
+  "중단",
+  "취소",
+  "ㄴㄴ",
+]);
+
+function normalizeReply(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^["'`“‘]+/, "")
+    .replace(/["'`”’.!]+$/, "")
+    .trim();
+}
+
+/**
+ * Read a reply as an approval, a refusal, or neither.
+ *
+ * Matching is on the whole reply, never a prefix: "no, run it with sudo instead"
+ * asks for a different command and must not be read as the refusal its first
+ * word looks like. Anything this cannot place is `unclear`, which the caller
+ * must not settle in either direction.
+ */
+function permissionVerdict(response: unknown): PermissionVerdict {
+  if (response === true) return "allow";
+  if (response === false) return "deny";
+  if (typeof response === "string") {
+    const reply = normalizeReply(response);
+    if (reply === ALLOW_ALWAYS) return "allow_always";
+    if (APPROVES.has(reply)) return "allow";
+    if (REFUSES.has(reply)) return "deny";
+    return "unclear";
+  }
   const record = asRecord(response);
-  return (
-    response === true ||
-    (typeof response === "string" &&
-      /^(allow|approve|approved|proceed|yes)$/i.test(response.trim())) ||
+  if (record.action === ALLOW_ALWAYS) return "allow_always";
+  if (
     record.behavior === "allow" ||
     record.allowed === true ||
     record.approved === true ||
-    record.action === "allow" ||
     record.allow === true ||
+    record.action === "allow" ||
     record.action === "approve" ||
     record.action === "proceed"
-  );
+  )
+    return "allow";
+  if (
+    record.behavior === "deny" ||
+    record.allowed === false ||
+    record.approved === false ||
+    record.allow === false ||
+    record.action === "deny"
+  )
+    return "deny";
+  return "unclear";
 }
 
 function denyMessage(response: unknown, fallback: string): string {
@@ -199,16 +373,88 @@ function initialUserMessage(prompt: string): SDKUserMessage {
   };
 }
 
-function interactionBody(input: Record<string, unknown>): string {
-  try {
-    return JSON.stringify(input);
-  } catch {
-    return "Unserializable interaction input";
+/** The tool argument worth putting in front of a person, fenced. */
+function fencedInput(input: Record<string, unknown>): string {
+  const command = input.command;
+  return typeof command === "string" && command.trim() !== ""
+    ? `\`\`\`sh\n${truncate(command, FENCE_LIMIT)}\n\`\`\``
+    : `\`\`\`json\n${truncate(safeJson(input, 2), FENCE_LIMIT)}\n\`\`\``;
+}
+
+/**
+ * What the operator is being asked to approve, in a shape a channel renders.
+ *
+ * A permission request used to travel as the tool input on one JSON line, and
+ * the Linear connector posted the body alone, so an approval showed a tool name
+ * and nothing about what would actually run.
+ */
+function permissionBody(
+  title: string,
+  input: Record<string, unknown>,
+  description: string | undefined,
+  sticky: readonly PermissionUpdate[],
+): string {
+  const parts = [`**${title}**`];
+  if (description !== undefined && description.trim() !== "")
+    parts.push(description);
+  parts.push(fencedInput(input));
+  const rules = ruleTexts(sticky);
+  if (rules.length > 0) {
+    parts.push(
+      `Allowing this every time stores ${rules.map((rule) => `\`${rule}\``).join(", ")} for this Agent, so later Sessions will not ask again.`,
+    );
   }
+  return parts.join("\n\n");
+}
+
+/**
+ * The choices a permission request offers.
+ *
+ * Labels carry the whole signal: the channel APIs have no destructive or primary
+ * styling, so a one-word "Yes" would leave a person clicking with no idea what
+ * they were agreeing to. The sticky choice appears only when the SDK proposed a
+ * rule for it.
+ */
+function permissionOptions(
+  toolName: string,
+  sticky: readonly PermissionUpdate[],
+): { label: string; value: string }[] {
+  const rules = ruleTexts(sticky);
+  return [
+    { label: `Allow this ${toolName} call once`, value: ALLOW_ONCE },
+    ...(rules.length > 0
+      ? [
+          {
+            label: `Always allow ${truncate(rules.join(", "), PARAMETER_LIMIT)} for this Agent`,
+            value: ALLOW_ALWAYS,
+          },
+        ]
+      : []),
+    { label: `Deny this ${toolName} call`, value: DENY },
+  ];
+}
+
+/** Put an unreadable reply back to the channel instead of settling it. */
+function clarificationBody(request: unknown): string {
+  const title = asRecord(request).title;
+  return [
+    typeof title === "string" && title !== ""
+      ? `**${title}**`
+      : "**The pending request is still waiting.**",
+    `That reply did not read as an approval or a refusal, so nothing ran and the request is still waiting. Choose one of the options, or reply exactly \`${ALLOW_ONCE}\` or \`${DENY}\`.`,
+  ].join("\n\n");
+}
+
+/** ExitPlanMode carries the plan as markdown already; serializing it hides it. */
+function planBody(input: Record<string, unknown>): string {
+  const plan = input.plan;
+  return typeof plan === "string" && plan.trim() !== ""
+    ? plan
+    : safeJson(input);
 }
 
 function questionBody(input: Record<string, unknown>): string {
-  if (!Array.isArray(input.questions)) return interactionBody(input);
+  if (!Array.isArray(input.questions)) return safeJson(input);
   return input.questions
     .map((question, index) => {
       const record = asRecord(question);
@@ -248,8 +494,13 @@ export class ClaudeRuntime implements Runtime {
 
   /**
    * A question is settled only once every part has an answer; a permission or
-   * plan is settled by the first reply. Both decisions live here because both
-   * depend on how this runtime's tools encode their requests.
+   * plan is settled by the first reply it can read. All three decisions live
+   * here because all three depend on how this runtime's tools encode requests.
+   *
+   * A plan stays two-way on purpose. Any reply that is not an approval is sent
+   * to Claude verbatim as revision feedback, so an unreadable reply there is
+   * still acted on and nothing is lost by settling it. A permission has no such
+   * path: an unreadable reply used to become a silent denial.
    */
   interpretResponse(
     pending: PendingInteractionState,
@@ -269,10 +520,36 @@ export class ClaudeRuntime implements Runtime {
           }
         : { state: "partial", progress: accumulated.result };
     }
+
+    const verdict = permissionVerdict(incoming);
+    if (pending.kind === "plan") {
+      return {
+        state: "resolved",
+        status:
+          verdict === "allow" || verdict === "allow_always"
+            ? "answered"
+            : "denied",
+        response: incoming,
+      };
+    }
+    if (verdict === "unclear")
+      return { state: "unresolved", body: clarificationBody(pending.request) };
+    if (verdict === "deny")
+      return { state: "resolved", status: "denied", response: incoming };
+
+    const granted =
+      verdict === "allow_always"
+        ? stickySuggestions(
+            asRecord(asRecord(pending.request).data).suggestions,
+          )
+        : [];
+    if (granted.length === 0)
+      return { state: "resolved", status: "answered", response: incoming };
     return {
       state: "resolved",
-      status: allowResult(incoming) ? "answered" : "denied",
-      response: incoming,
+      status: "answered",
+      response: { ...asRecord(incoming), updatedPermissions: granted },
+      runtimeState: mergeStoredRules(pending.runtimeState, granted),
     };
   }
 
@@ -305,12 +582,16 @@ export class ClaudeRuntime implements Runtime {
         : isPlan
           ? "Claude has a plan"
           : (sdkOptions.title ?? `Claude wants to use ${toolName}`);
+      const sticky =
+        isQuestion || isPlan ? [] : stickySuggestions(sdkOptions.suggestions);
       const request: RuntimeInteractionRequest = {
         kind,
         title,
-        body:
-          sdkOptions.description ??
-          (isQuestion ? questionBody(input) : interactionBody(input)),
+        body: isQuestion
+          ? (sdkOptions.description ?? questionBody(input))
+          : isPlan
+            ? (sdkOptions.description ?? planBody(input))
+            : permissionBody(title, input, sdkOptions.description, sticky),
         data: {
           toolName,
           input,
@@ -326,18 +607,16 @@ export class ClaudeRuntime implements Runtime {
           ...(!isQuestion && isPlan
             ? {
                 options: [
-                  { label: "Proceed", value: "proceed" },
-                  { label: "Revise", value: "revise" },
+                  {
+                    label: "Approve this plan and start the work",
+                    value: "proceed",
+                  },
+                  { label: "Send the plan back with changes", value: "revise" },
                 ],
               }
             : {}),
           ...(!isQuestion && !isPlan
-            ? {
-                options: [
-                  { label: "Allow", value: "allow" },
-                  { label: "Deny", value: "deny" },
-                ],
-              }
+            ? { options: permissionOptions(toolName, sticky) }
             : {}),
           ...(sdkOptions.suggestions
             ? { suggestions: sdkOptions.suggestions }
@@ -402,10 +681,22 @@ export class ClaudeRuntime implements Runtime {
           };
     };
 
+    // `settings` is an additional layer, not a replacement for the settings files
+    // the SDK loads on its own. Rules the operator made sticky are replayed here
+    // because the destination the SDK names for them, localSettings, resolves
+    // inside a Session worktree that is deleted along with the Session.
+    //
+    // Nothing else is passed. `settingSources`, `env`, and `mcpServers` are
+    // omitted so the SDK applies its own defaults and the Session inherits the
+    // operator's real environment, which is the whole point of the product.
+    const allowRules = permissionAllowRules(options.runtimeState);
     const sdkOptions: Options = {
       cwd: options.cwd,
       additionalDirectories: [...options.additionalDirectories],
       canUseTool,
+      ...(allowRules.length > 0
+        ? { settings: { permissions: { allow: allowRules } } }
+        : {}),
       ...(runtimeSessionId ? { resume: runtimeSessionId } : {}),
     };
 

@@ -36,6 +36,7 @@ function downgradeToV1(database: string): void {
     ALTER TABLE installations DROP COLUMN enrolled_at;
     ALTER TABLE installations RENAME COLUMN relay_origin TO relay_url;
     ALTER TABLE installations RENAME COLUMN last_connected_at TO last_seen_at;
+    DROP TABLE agent_runtime_state;
     DELETE FROM schema_migrations WHERE version >= 2;
   `);
   db.close();
@@ -165,6 +166,7 @@ describe("local database migrations", () => {
     // Reopen at the current schema, forcing the rebuild migrations to run.
     initial.db.pragma("user_version = 0");
     initial.db.prepare("DELETE FROM schema_migrations WHERE version > 3").run();
+    initial.db.exec("DROP TABLE agent_runtime_state;");
     initial.close();
 
     const migrated = new Persistence(paths.database, {

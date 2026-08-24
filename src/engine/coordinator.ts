@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 import type {
+  Agent,
   ConnectorCommand,
   DeliveryKind,
+  InteractionKind,
   RuntimeType,
   Session,
 } from "../model.ts";
@@ -35,6 +37,25 @@ type PendingInteraction = {
 type ScheduledTurn = { sessionId: string; prompt: string; followUpId?: string };
 
 const sessionId = () => `ss_${randomUUID().replaceAll("-", "")}`;
+
+/**
+ * The `data` a runtime attached to an interaction request, read back.
+ *
+ * This is the coordinator reading its own envelope, not the runtime's protocol:
+ * the contents stay opaque and are passed through exactly as they arrived.
+ */
+function persistedRequestData(
+  request: unknown,
+): Readonly<Record<string, unknown>> {
+  const record =
+    typeof request === "object" && request !== null
+      ? (request as Record<string, unknown>)
+      : {};
+  const data = record.data;
+  return typeof data === "object" && data !== null
+    ? (data as Record<string, unknown>)
+    : {};
+}
 
 export class SessionCoordinator {
   private readonly concurrency: number;
@@ -260,6 +281,10 @@ export class SessionCoordinator {
       cwd: session.cwd,
       additionalDirectories: agent.additionalDirectories,
       prompt: scheduled.prompt,
+      runtimeState: this.options.store.getAgentRuntimeState(
+        agent.id,
+        agent.runtime,
+      ),
       requestInteraction: (request: RuntimeInteractionRequest) =>
         this.requestInteraction(session, request),
     };
@@ -333,11 +358,12 @@ export class SessionCoordinator {
       request: persistedRequest,
     });
     this.options.store.transitionSession(session.id, "waiting");
-    this.enqueue(session, request.kind, request.body, {
-      interactionId: interaction.id,
-      ...(request.kind === "permission" ? { operatorOnly: true } : {}),
-      ...request.data,
-    });
+    this.enqueue(
+      session,
+      request.kind,
+      request.body,
+      this.interactionMetadata(interaction.id, request.kind, request.data),
+    );
     const promise = new Promise<InteractionResult>((resolve, reject) => {
       this.pendingInteractions.set(interaction.id, {
         sessionId: session.id,
@@ -362,12 +388,27 @@ export class SessionCoordinator {
     });
   }
 
+  private interactionMetadata(
+    interactionId: string,
+    kind: InteractionKind,
+    data: Readonly<Record<string, unknown>>,
+  ): Record<string, unknown> {
+    return {
+      interactionId,
+      ...(kind === "permission" ? { operatorOnly: true } : {}),
+      ...data,
+    };
+  }
+
   /**
    * Hand a channel reply to the runtime and record whatever it decided.
    *
-   * The coordinator does not interpret the reply: what counts as an approval, and
-   * when a multi-part question is complete, are properties of the runtime's tool
-   * protocol and are decided there.
+   * The coordinator does not interpret the reply: what counts as an approval,
+   * when a multi-part question is complete, and whether a reply said anything
+   * readable at all are properties of the runtime's tool protocol and are
+   * decided there. A reply the runtime could not read leaves the interaction
+   * pending and goes back to the channel as a fresh request, because a channel
+   * activity cannot be edited once posted.
    */
   private resolveInteraction(
     interactionId: string,
@@ -376,13 +417,17 @@ export class SessionCoordinator {
   ): void {
     const interaction = this.options.store.getInteraction(interactionId);
     if (interaction === undefined) return;
-    const runtime = this.runtimeForSession(sessionId);
-    if (runtime === undefined) return;
-    const outcome = runtime.interpretResponse(
+    const executor = this.executorForSession(sessionId);
+    if (executor === undefined) return;
+    const outcome = executor.runtime.interpretResponse(
       {
         kind: interaction.kind,
         request: interaction.request,
         progress: interaction.response,
+        runtimeState: this.options.store.getAgentRuntimeState(
+          executor.agent.id,
+          executor.agent.runtime,
+        ),
       },
       response,
     );
@@ -392,6 +437,28 @@ export class SessionCoordinator {
         outcome.progress,
       );
       return;
+    }
+    if (outcome.state === "unresolved") {
+      const session = this.options.store.getSession(sessionId);
+      if (session === undefined) return;
+      this.enqueue(
+        session,
+        interaction.kind,
+        outcome.body,
+        this.interactionMetadata(
+          interaction.id,
+          interaction.kind,
+          persistedRequestData(interaction.request),
+        ),
+      );
+      return;
+    }
+    if (outcome.runtimeState !== undefined) {
+      this.options.store.setAgentRuntimeState(
+        executor.agent.id,
+        executor.agent.runtime,
+        outcome.runtimeState,
+      );
     }
     this.options.store.resolveInteraction(
       interactionId,
@@ -405,15 +472,17 @@ export class SessionCoordinator {
     }
   }
 
-  /** The runtime that owns a Session, resolved through its Binding's Agent. */
-  private runtimeForSession(sessionId: string): Runtime | undefined {
+  /** The Agent that owns a Session and the runtime it runs on. */
+  private executorForSession(
+    sessionId: string,
+  ): { agent: Agent; runtime: Runtime } | undefined {
     const session = this.options.store.getSession(sessionId);
     if (session === undefined) return undefined;
     const binding = this.options.store.getBinding(session.bindingId);
     if (binding === undefined) return undefined;
     const agent = this.options.store.getAgent(binding.agentId);
     if (agent === undefined) return undefined;
-    return this.options.runtimes(agent.runtime);
+    return { agent, runtime: this.options.runtimes(agent.runtime) };
   }
 
   private async stop(session: Session): Promise<void> {

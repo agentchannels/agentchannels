@@ -6,7 +6,7 @@ import type Database from "better-sqlite3";
 import { PRODUCT_VERSION } from "../version.ts";
 import { internalError, invalidState } from "../errors.ts";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export type MigrationOptions = {
   filename: string;
@@ -327,11 +327,36 @@ function migrateToV4(db: Database.Database): void {
   ).run(new Date().toISOString());
 }
 
+/**
+ * Give an Agent somewhere to keep runtime-owned permission state.
+ *
+ * A Session worktree is created and deleted per Session, so a rule the operator
+ * approved with "always allow" had nowhere to live that outlived the Session
+ * that learned it. This is that place. Its contents are opaque: only the runtime
+ * adapter that wrote a row may read one, which is why the row is keyed by
+ * runtime as well as by Agent.
+ */
+function migrateToV5(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE agent_runtime_state (
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      runtime TEXT NOT NULL CHECK (length(runtime) > 0),
+      state_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (agent_id, runtime)
+    );
+  `);
+  db.prepare(
+    "INSERT INTO schema_migrations(version, applied_at) VALUES (5, ?)",
+  ).run(new Date().toISOString());
+}
+
 const migrations: Readonly<Record<number, (db: Database.Database) => void>> = {
   1: migrateToV1,
   2: migrateToV2,
   3: migrateToV3,
   4: migrateToV4,
+  5: migrateToV5,
 };
 
 export function migrate(
