@@ -249,6 +249,163 @@ describe("Linear connector", () => {
       },
     });
   });
+
+  it("renders an approval as a native select whose values identify it", async () => {
+    // Clicking an option puts its value into the thread as a plain user
+    // message. Nothing else marks it, so the value carries the interaction id
+    // and a click is told apart from the same words typed by hand.
+    let requestInit: RequestInit | undefined;
+    const fetcher = vi.fn((_input: string | URL, init?: RequestInit) => {
+      requestInit = init;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            data: { agentActivityCreate: { success: true } },
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    await new LinearConnector({ fetch: fetcher }).deliver(
+      {
+        kind: "permission",
+        remoteConversationId: "S1",
+        body: "**Claude wants to use Bash**",
+        metadata: {
+          interactionId: "ix_1",
+          options: [
+            { label: "Allow this Bash call once", value: "allow" },
+            { label: "Deny this Bash call", value: "deny" },
+          ],
+        },
+      },
+      { apiToken: "lin-token" },
+    );
+    if (typeof requestInit?.body !== "string")
+      throw new Error("expected JSON request body");
+    expect(JSON.parse(requestInit.body)).toMatchObject({
+      variables: {
+        input: {
+          content: {
+            type: "elicitation",
+            body: "**Claude wants to use Bash**",
+          },
+          signal: "select",
+          signalMetadata: {
+            options: [
+              { label: "Allow this Bash call once", value: "ac:ix_1:allow" },
+              { label: "Deny this Bash call", value: "ac:ix_1:deny" },
+            ],
+          },
+        },
+      },
+    });
+  });
+
+  it("reads a chosen option back as the answer to its own interaction", () => {
+    const chosen = new LinearConnector().verifyAndParse(
+      linearRequest(
+        JSON.stringify({
+          action: "prompted",
+          agentSession: { id: "S1" },
+          agentActivity: { body: "ac:ix_1:allow_always", actor: { id: "U1" } },
+        }),
+      ),
+      { webhookSecret: "linear-secret" },
+    );
+    expect(chosen).toMatchObject({
+      ok: true,
+      command: {
+        type: "interaction_response",
+        remoteConversationId: "S1",
+        interactionId: "ix_1",
+        response: "allow_always",
+      },
+    });
+    const typed = new LinearConnector().verifyAndParse(
+      linearRequest(
+        JSON.stringify({
+          action: "prompted",
+          agentSession: { id: "S1" },
+          agentActivity: { body: "allow", actor: { id: "U1" } },
+        }),
+      ),
+      { webhookSecret: "linear-secret" },
+    );
+    expect(typed).toMatchObject({ ok: true, command: { type: "message" } });
+    // An issue title is not a reply, whatever it happens to look like.
+    const opened = new LinearConnector().verifyAndParse(
+      linearRequest(
+        JSON.stringify({
+          action: "created",
+          agentSession: { id: "S1", issue: { title: "ac:ix_1:allow" } },
+          actor: { id: "U1" },
+        }),
+      ),
+      { webhookSecret: "linear-secret" },
+    );
+    expect(opened).toMatchObject({
+      ok: true,
+      command: { type: "message", text: "ac:ix_1:allow" },
+    });
+  });
+
+  it("posts a tool call as an action, transient first and durable second", async () => {
+    const bodies: unknown[] = [];
+    const fetcher = vi.fn((_input: string | URL, init?: RequestInit) => {
+      if (typeof init?.body === "string") bodies.push(JSON.parse(init.body));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            data: { agentActivityCreate: { success: true } },
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    const connector = new LinearConnector({ fetch: fetcher });
+    await connector.deliver(
+      {
+        kind: "action",
+        remoteConversationId: "S1",
+        body: "op whoami",
+        metadata: { action: "Bash", ephemeral: true },
+      },
+      { apiToken: "lin-token" },
+    );
+    await connector.deliver(
+      {
+        kind: "action",
+        remoteConversationId: "S1",
+        body: "op whoami",
+        metadata: { action: "Bash", result: "user@example.com" },
+      },
+      { apiToken: "lin-token" },
+    );
+    expect(bodies).toMatchObject([
+      {
+        variables: {
+          input: {
+            content: { type: "action", action: "Bash", parameter: "op whoami" },
+            ephemeral: true,
+          },
+        },
+      },
+      {
+        variables: {
+          input: {
+            content: {
+              type: "action",
+              action: "Bash",
+              parameter: "op whoami",
+              result: "user@example.com",
+            },
+          },
+        },
+      },
+    ]);
+    expect(bodies[0]).not.toHaveProperty("variables.input.content.result");
+  });
 });
 
 describe("onboarding artifacts", () => {

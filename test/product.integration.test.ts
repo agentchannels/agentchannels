@@ -32,11 +32,20 @@ type RuntimeCall = {
   prompt: string;
   cwd: string;
   runtimeSessionId: string | null;
+  runtimeState: unknown;
 };
 
 type Deferred<T> = {
   promise: Promise<T>;
   resolve(value: T): void;
+};
+
+/** One rule, exactly as the SDK would propose it alongside a Bash approval. */
+const VAULT_SUGGESTION = {
+  type: "addRules",
+  rules: [{ toolName: "Bash", ruleContent: "op whoami *" }],
+  behavior: "allow",
+  destination: "localSettings",
 };
 
 function deferred<T>(): Deferred<T> {
@@ -72,6 +81,7 @@ class DeterministicRuntime implements Runtime {
       prompt: options.prompt,
       cwd: options.cwd,
       runtimeSessionId: null,
+      runtimeState: options.runtimeState,
     });
     return this.turn(options, runtimeSessionId);
   }
@@ -82,6 +92,7 @@ class DeterministicRuntime implements Runtime {
       prompt: options.prompt,
       cwd: options.cwd,
       runtimeSessionId: options.runtimeSessionId,
+      runtimeState: options.runtimeState,
     });
     return this.turn(options, options.runtimeSessionId);
   }
@@ -142,6 +153,16 @@ class DeterministicRuntime implements Runtime {
         },
       });
       yield { type: "final", body: "All questions answered." };
+      return;
+    }
+    if (options.prompt === "needs the vault") {
+      await options.requestInteraction({
+        kind: "permission",
+        title: "Claude wants to use Bash",
+        body: "**Claude wants to use Bash**",
+        data: { toolName: "Bash", suggestions: [VAULT_SUGGESTION] },
+      });
+      yield { type: "final", body: "Vault reached." };
       return;
     }
     if (options.prompt.startsWith("hold-")) {
@@ -312,6 +333,155 @@ describe("AgentChannels product flow", () => {
     expect(await accepted).toBe("accepted");
   });
 
+  it("carries an approved rule to the next Session on the same Agent", async () => {
+    // The SDK writes a sticky rule to localSettings, which resolves inside the
+    // Session worktree. The worktree is deleted with the Session, so before this
+    // an "always allow" survived nothing and every Bash call asked again.
+    const { store, coordinator, runtime, bindingId, operatorUserId } =
+      createFixture();
+
+    expect(
+      await coordinator.accept(
+        bindingId,
+        message(
+          "evt-vault-1",
+          "thread-vault-1",
+          operatorUserId,
+          "needs the vault",
+        ),
+      ),
+    ).toBe("accepted");
+    await waitUntil(() => latestInteraction(store, "permission") !== undefined);
+    const permission = latestInteraction(store, "permission");
+    if (permission === undefined)
+      throw new Error("Permission interaction was not persisted");
+    expect(
+      await coordinator.accept(bindingId, {
+        type: "interaction_response",
+        deliveryId: "evt-vault-allow",
+        remoteConversationId: "thread-vault-1",
+        remoteUserId: operatorUserId,
+        interactionId: permission.id,
+        response: "allow_always",
+      }),
+    ).toBe("accepted");
+    await waitUntil(
+      () =>
+        store.getSessionByRemoteConversation(bindingId, "thread-vault-1")
+          ?.status === "completed",
+    );
+
+    // Stored under the Agent and its runtime, verbatim and uninterpreted.
+    expect(store.getAgentRuntimeState("ag_product", "claude-code")).toEqual({
+      permissionRules: [VAULT_SUGGESTION],
+    });
+
+    expect(
+      await coordinator.accept(
+        bindingId,
+        message(
+          "evt-vault-2",
+          "thread-vault-2",
+          operatorUserId,
+          "needs the vault",
+        ),
+      ),
+    ).toBe("accepted");
+    await waitUntil(() => runtime.calls.length === 2);
+    expect(runtime.calls[1]).toMatchObject({
+      method: "start",
+      runtimeState: { permissionRules: [VAULT_SUGGESTION] },
+    });
+
+    // Settle the second Session too: an interaction left pending holds a turn
+    // open, and the fixture is torn down underneath it at the end of the test.
+    await waitUntil(
+      () =>
+        latestInteraction(store, "permission")?.sessionId !==
+        permission.sessionId,
+    );
+    const second = latestInteraction(store, "permission");
+    if (second === undefined) throw new Error("Second permission is missing");
+    await coordinator.accept(bindingId, {
+      type: "interaction_response",
+      deliveryId: "evt-vault-allow-2",
+      remoteConversationId: "thread-vault-2",
+      remoteUserId: operatorUserId,
+      interactionId: second.id,
+      response: "allow",
+    });
+    await waitUntil(
+      () =>
+        store.getSessionByRemoteConversation(bindingId, "thread-vault-2")
+          ?.status === "completed",
+    );
+  });
+
+  it("asks again instead of denying a reply it cannot read", async () => {
+    // An unreadable reply used to settle as a denial, so an operator who wrote
+    // anything but one of five words had refused without being told.
+    const { store, coordinator, bindingId, operatorUserId } = createFixture();
+    expect(
+      await coordinator.accept(
+        bindingId,
+        message(
+          "evt-unclear-1",
+          "thread-unclear",
+          operatorUserId,
+          "needs the vault",
+        ),
+      ),
+    ).toBe("accepted");
+    await waitUntil(() => latestInteraction(store, "permission") !== undefined);
+    const permission = latestInteraction(store, "permission");
+    if (permission === undefined)
+      throw new Error("Permission interaction was not persisted");
+    store.claimDueDeliveries(50);
+
+    expect(
+      await coordinator.accept(bindingId, {
+        type: "interaction_response",
+        deliveryId: "evt-unclear-reply",
+        remoteConversationId: "thread-unclear",
+        remoteUserId: operatorUserId,
+        interactionId: permission.id,
+        response: "왜 그게 필요한데?",
+      }),
+    ).toBe("accepted");
+
+    expect(store.getInteraction(permission.id)?.status).toBe("pending");
+    expect(
+      store.getSessionByRemoteConversation(bindingId, "thread-unclear")?.status,
+    ).toBe("waiting");
+    const reasked = store
+      .claimDueDeliveries(50)
+      .filter((delivery) => delivery.remoteConversationId === "thread-unclear");
+    expect(reasked).toHaveLength(1);
+    expect(reasked[0]?.kind).toBe("permission");
+    expect(reasked[0]?.metadata).toMatchObject({
+      interactionId: permission.id,
+      operatorOnly: true,
+      toolName: "Bash",
+    });
+
+    // And the same request still settles once a readable reply arrives.
+    expect(
+      await coordinator.accept(bindingId, {
+        type: "interaction_response",
+        deliveryId: "evt-unclear-allow",
+        remoteConversationId: "thread-unclear",
+        remoteUserId: operatorUserId,
+        interactionId: permission.id,
+        response: "allow",
+      }),
+    ).toBe("accepted");
+    await waitUntil(
+      () =>
+        store.getSessionByRemoteConversation(bindingId, "thread-unclear")
+          ?.status === "completed",
+    );
+  });
+
   it("keeps the complete interaction flow local, isolated, authorized, and resumable", async () => {
     const {
       repository,
@@ -421,6 +591,7 @@ describe("AgentChannels product flow", () => {
       prompt: "follow up with the test result",
       cwd: session.cwd,
       runtimeSessionId: "runtime-1",
+      runtimeState: null,
     });
     expect(store.getSession(session.id)?.runtimeSessionId).toBe("runtime-1");
   });
@@ -583,6 +754,7 @@ describe("AgentChannels product flow", () => {
         prompt: "continue",
         cwd: worktree.path,
         runtimeSessionId: "runtime-crashed",
+        runtimeState: null,
       },
     ]);
   });

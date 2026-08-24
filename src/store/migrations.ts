@@ -6,7 +6,7 @@ import type Database from "better-sqlite3";
 import { PRODUCT_VERSION } from "../version.ts";
 import { internalError, invalidState } from "../errors.ts";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export type MigrationOptions = {
   filename: string;
@@ -327,11 +327,72 @@ function migrateToV4(db: Database.Database): void {
   ).run(new Date().toISOString());
 }
 
+/**
+ * Give an Agent somewhere to keep runtime-owned permission state.
+ *
+ * A Session worktree is created and deleted per Session, so a rule the operator
+ * approved with "always allow" had nowhere to live that outlived the Session
+ * that learned it. This is that place. Its contents are opaque: only the runtime
+ * adapter that wrote a row may read one, which is why the row is keyed by
+ * runtime as well as by Agent.
+ */
+function migrateToV5(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE agent_runtime_state (
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      runtime TEXT NOT NULL CHECK (length(runtime) > 0),
+      state_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (agent_id, runtime)
+    );
+  `);
+  db.prepare(
+    "INSERT INTO schema_migrations(version, applied_at) VALUES (5, ?)",
+  ).run(new Date().toISOString());
+}
+
+/**
+ * Admit tool calls as a delivery kind of their own.
+ *
+ * Progress used to be the only shape a running Session could report, so a tool
+ * call reached a channel as prose. SQLite cannot widen a CHECK in place, so the
+ * table is rebuilt without it.
+ */
+function migrateToV6(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE deliveries_next (
+      id TEXT PRIMARY KEY,
+      session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+      connector TEXT NOT NULL CHECK (length(connector) > 0),
+      remote_conversation_id TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('progress', 'action', 'final', 'question', 'permission', 'plan', 'stopped', 'error')),
+      body TEXT NOT NULL,
+      metadata_json TEXT,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'sending', 'retrying', 'delivered', 'failed')),
+      attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+      next_attempt_at TEXT NOT NULL,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    INSERT INTO deliveries_next SELECT id, session_id, connector, remote_conversation_id, kind, body, metadata_json, status, attempts, next_attempt_at, last_error, created_at, updated_at FROM deliveries;
+    DROP TABLE deliveries;
+    ALTER TABLE deliveries_next RENAME TO deliveries;
+    CREATE INDEX deliveries_due_idx ON deliveries(status, next_attempt_at);
+    CREATE INDEX deliveries_session_idx ON deliveries(session_id);
+  `);
+  db.prepare(
+    "INSERT INTO schema_migrations(version, applied_at) VALUES (6, ?)",
+  ).run(new Date().toISOString());
+}
+
 const migrations: Readonly<Record<number, (db: Database.Database) => void>> = {
   1: migrateToV1,
   2: migrateToV2,
   3: migrateToV3,
   4: migrateToV4,
+  5: migrateToV5,
+  6: migrateToV6,
 };
 
 export function migrate(

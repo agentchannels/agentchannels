@@ -36,6 +36,7 @@ function downgradeToV1(database: string): void {
     ALTER TABLE installations DROP COLUMN enrolled_at;
     ALTER TABLE installations RENAME COLUMN relay_origin TO relay_url;
     ALTER TABLE installations RENAME COLUMN last_connected_at TO last_seen_at;
+    DROP TABLE agent_runtime_state;
     DELETE FROM schema_migrations WHERE version >= 2;
   `);
   db.close();
@@ -165,6 +166,7 @@ describe("local database migrations", () => {
     // Reopen at the current schema, forcing the rebuild migrations to run.
     initial.db.pragma("user_version = 0");
     initial.db.prepare("DELETE FROM schema_migrations WHERE version > 3").run();
+    initial.db.exec("DROP TABLE agent_runtime_state;");
     initial.close();
 
     const migrated = new Persistence(paths.database, {
@@ -176,6 +178,15 @@ describe("local database migrations", () => {
       expect(migrated.listAccess("bd_cascade")).toHaveLength(1);
       expect(migrated.getSession("ss_cascade")?.worktreePath).toBe("/worktree");
       expect(migrated.claimDueDeliveries(10)).toHaveLength(1);
+      // The rebuild is what widened the delivery kinds; tool calls are new.
+      expect(() =>
+        migrated.enqueueDelivery({
+          connector: "linear",
+          remoteConversationId: "thread",
+          kind: "action",
+          body: "op whoami",
+        }),
+      ).not.toThrow();
       expect(
         migrated.db.pragma("foreign_keys", { simple: true }) as number,
       ).toBe(1);

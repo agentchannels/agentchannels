@@ -13,6 +13,13 @@ export type RuntimeInteractionRequest = {
 export type RuntimeEvent =
   | { type: "session_started"; runtimeSessionId: string }
   | { type: "progress"; body: string }
+  /**
+   * A tool call, split in two because a channel activity cannot be edited once
+   * posted. The started event carries no result and is the one a channel may
+   * render as transient; the finished event is the durable record.
+   */
+  | { type: "tool_started"; action: string; parameter: string }
+  | { type: "tool_finished"; action: string; parameter: string; result: string }
   | { type: "final"; body: string }
   | { type: "error"; message: string };
 
@@ -32,6 +39,8 @@ export type RuntimeStartOptions = {
   cwd: string;
   additionalDirectories: readonly string[];
   prompt: string;
+  /** Whatever this runtime last persisted for the Session's Agent, verbatim. */
+  runtimeState: unknown;
   requestInteraction(
     request: RuntimeInteractionRequest,
   ): Promise<InteractionResult>;
@@ -48,16 +57,29 @@ export type PendingInteractionState = Readonly<{
   request: unknown;
   /** What earlier partial responses accumulated, if any. */
   progress: unknown;
+  /** Whatever this runtime last persisted for the Session's Agent, verbatim. */
+  runtimeState: unknown;
 }>;
 
 /**
- * A channel reply either settles a pending interaction or adds to it. Multi-part
- * questions arrive one answer at a time, so `partial` carries the accumulated
- * state forward without waking the runtime.
+ * A channel reply either settles a pending interaction, adds to it, or fails to
+ * say anything the runtime can act on.
+ *
+ * Multi-part questions arrive one answer at a time, so `partial` carries the
+ * accumulated state forward without waking the runtime. `unresolved` is the
+ * reply the runtime could not read: settling it either way would guess, and
+ * guessing an approval is unsafe while guessing a denial is what used to happen
+ * silently. The interaction stays pending and `body` is put back to the channel.
  */
 export type InteractionOutcome =
   | Readonly<{ state: "partial"; progress: unknown }>
-  | (Readonly<{ state: "resolved" }> & InteractionResult);
+  | Readonly<{ state: "unresolved"; body: string }>
+  | (Readonly<{
+      state: "resolved";
+      /** Replaces this Agent's stored state for this runtime when present. */
+      runtimeState?: unknown;
+    }> &
+      InteractionResult);
 
 export type Runtime = {
   readonly type: "claude-code";

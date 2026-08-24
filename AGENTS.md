@@ -46,6 +46,9 @@ tests can never read or delete the operator's real installation secrets.
 - Create Git Session worktrees from the repository's current `HEAD`. Never copy the operator's uncommitted working tree into a Session.
 - Delete only worktrees that AgentChannels owns and has verified are clean. Preserve dirty or unowned worktrees.
 - New runtime permission decisions are operator-only. Shared users may work in Sessions but may not expand runtime authority.
+- A permission reply the runtime cannot read must leave the interaction pending and ask again. Settling it as a denial tells the operator nothing and looks identical to being ignored.
+- Agent-scoped runtime state is opaque outside the runtime that wrote it. A Claude permission rule has no counterpart in another runtime, so the store, the engine, and the connectors persist and pass the blob without reading it.
+- Never pass `settingSources`, `env`, or `mcpServers` to the Claude SDK. Omitting them is what makes a Session inherit the operator's real CLAUDE.md, skills, MCP servers, and secrets, and one added key would end that silently. `settings` is a separate additive layer and is the one exception.
 - Verify Slack and Linear signatures locally from the original raw request body and headers before dispatching work.
 - Persist follow-ups that arrive during an active runtime turn and deliver them in order after that turn. Do not steer the active turn implicitly.
 - Preserve crash recovery metadata and require an intentional follow-up before resuming interrupted work.
