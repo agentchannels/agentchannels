@@ -191,6 +191,19 @@ function promptText(
   );
 }
 
+/**
+ * A click on a Linear select arrives as a plain user message carrying the
+ * option's value and nothing else: no interaction id, and no marker separating
+ * it from a sentence the person typed themselves. The value has to carry both,
+ * so it is a token rather than prose. The interaction id comes first because it
+ * cannot contain a colon and the operator's chosen value can.
+ */
+const INTERACTION_TOKEN = /^ac:([A-Za-z0-9_-]+):([\s\S]+)$/;
+
+function interactionToken(interactionId: string, value: string): string {
+  return `ac:${interactionId}:${value}`;
+}
+
 function agentCommand(
   body: JsonObject,
   deliveryId: string,
@@ -213,6 +226,23 @@ function agentCommand(
   }
   const text = promptText(body, action, activity, session);
   if (!text) return undefined;
+  // Only a reply can answer a pending interaction. A session-opening event
+  // carries an issue title, and one that happens to look like a token would
+  // otherwise be routed to an interaction that does not exist yet.
+  const token =
+    action === "prompted" ? INTERACTION_TOKEN.exec(text.trim()) : null;
+  const interactionId = token?.[1];
+  const response = token?.[2];
+  if (interactionId !== undefined && response !== undefined) {
+    return {
+      type: "interaction_response",
+      deliveryId,
+      remoteConversationId,
+      remoteUserId,
+      interactionId,
+      response,
+    };
+  }
   return {
     type: "message",
     deliveryId,
@@ -222,8 +252,29 @@ function agentCommand(
   };
 }
 
+/** The pending interaction's choices, rendered as Linear's native select. */
+function selectOptions(
+  metadata: JsonObject | undefined,
+  interactionId: string,
+): { label: string; value: string }[] {
+  const options = Array.isArray(metadata?.options) ? metadata.options : [];
+  return options.map((option, index) => {
+    const parsed = objectValue(option);
+    const label =
+      stringValue(parsed?.label) ??
+      stringValue(parsed?.value) ??
+      `Option ${(index + 1).toString()}`;
+    return {
+      label,
+      value: interactionToken(
+        interactionId,
+        stringValue(parsed?.value) ?? label,
+      ),
+    };
+  });
+}
+
 function contentFor(message: DeliveryMessage): JsonObject {
-  const metadata = objectValue(message.metadata);
   const type =
     message.kind === "final" || message.kind === "stopped"
       ? "response"
@@ -234,11 +285,7 @@ function contentFor(message: DeliveryMessage): JsonObject {
             message.kind === "plan"
           ? "elicitation"
           : "thought";
-  return {
-    type,
-    body: message.body,
-    ...(metadata?.action ? { action: metadata.action } : {}),
-  };
+  return { type, body: message.body };
 }
 
 export class LinearConnector implements Connector, ConnectorModule {
@@ -411,10 +458,13 @@ export class LinearConnector implements Connector, ConnectorModule {
       agentSessionId: message.remoteConversationId,
       content,
     };
-    const signal = stringValue(metadata?.signal);
-    if (signal) input.signal = signal;
-    if (metadata?.signalMetadata !== undefined)
-      input.signalMetadata = metadata.signalMetadata;
+    const interactionId = stringValue(metadata?.interactionId);
+    const options =
+      interactionId === undefined ? [] : selectOptions(metadata, interactionId);
+    if (options.length > 0) {
+      input.signal = "select";
+      input.signalMetadata = { options };
+    }
     const result = await this.graphql(
       `mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
         agentActivityCreate(input: $input) { success agentActivity { id } }
