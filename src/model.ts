@@ -111,6 +111,7 @@ export type ConnectorCommand =
 
 export type DeliveryKind =
   | "progress"
+  | "action"
   | "final"
   | "question"
   | "permission"

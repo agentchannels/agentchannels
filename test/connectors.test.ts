@@ -349,6 +349,63 @@ describe("Linear connector", () => {
       command: { type: "message", text: "ac:ix_1:allow" },
     });
   });
+
+  it("posts a tool call as an action, transient first and durable second", async () => {
+    const bodies: unknown[] = [];
+    const fetcher = vi.fn((_input: string | URL, init?: RequestInit) => {
+      if (typeof init?.body === "string") bodies.push(JSON.parse(init.body));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            data: { agentActivityCreate: { success: true } },
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    const connector = new LinearConnector({ fetch: fetcher });
+    await connector.deliver(
+      {
+        kind: "action",
+        remoteConversationId: "S1",
+        body: "op whoami",
+        metadata: { action: "Bash", ephemeral: true },
+      },
+      { apiToken: "lin-token" },
+    );
+    await connector.deliver(
+      {
+        kind: "action",
+        remoteConversationId: "S1",
+        body: "op whoami",
+        metadata: { action: "Bash", result: "user@example.com" },
+      },
+      { apiToken: "lin-token" },
+    );
+    expect(bodies).toMatchObject([
+      {
+        variables: {
+          input: {
+            content: { type: "action", action: "Bash", parameter: "op whoami" },
+            ephemeral: true,
+          },
+        },
+      },
+      {
+        variables: {
+          input: {
+            content: {
+              type: "action",
+              action: "Bash",
+              parameter: "op whoami",
+              result: "user@example.com",
+            },
+          },
+        },
+      },
+    ]);
+    expect(bodies[0]).not.toHaveProperty("variables.input.content.result");
+  });
 });
 
 describe("onboarding artifacts", () => {

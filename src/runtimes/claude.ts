@@ -73,6 +73,57 @@ const textFromContent = (content: unknown): string[] => {
   });
 };
 
+type ToolCall = { id: string; action: string; parameter: string };
+
+/**
+ * The tool argument a person would recognise the call by.
+ *
+ * These are the argument names Claude Code's own tools use for their subject.
+ * Anything else falls back to the serialized input, so a tool this does not
+ * know still renders as itself rather than as an empty line.
+ */
+function toolParameter(input: Record<string, unknown>): string {
+  for (const key of ["command", "file_path", "pattern", "url"]) {
+    const value = input[key];
+    if (typeof value === "string" && value.trim() !== "")
+      return truncate(value, PARAMETER_LIMIT);
+  }
+  return truncate(safeJson(input), PARAMETER_LIMIT);
+}
+
+const toolCalls = (content: unknown): ToolCall[] => {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block): ToolCall[] => {
+    const record = asRecord(block);
+    if (record.type !== "tool_use" || typeof record.id !== "string") return [];
+    return [
+      {
+        id: record.id,
+        action: typeof record.name === "string" ? record.name : "tool",
+        parameter: toolParameter(asRecord(record.input)),
+      },
+    ];
+  });
+};
+
+const toolResults = (content: unknown): { id: string; result: string }[] => {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block): { id: string; result: string }[] => {
+    const record = asRecord(block);
+    if (record.type !== "tool_result" || typeof record.tool_use_id !== "string")
+      return [];
+    return [
+      {
+        id: record.tool_use_id,
+        result: truncate(
+          textFromContent(record.content).join("\n").trim(),
+          RESULT_LIMIT,
+        ),
+      },
+    ];
+  });
+};
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -93,6 +144,7 @@ const DENY = "deny";
 /** Long enough to hold a real command, short enough that a file body cannot flood a channel. */
 const FENCE_LIMIT = 1500;
 const PARAMETER_LIMIT = 200;
+const RESULT_LIMIT = 2000;
 
 function truncate(value: string, limit: number): string {
   return value.length <= limit ? value : `${value.slice(0, limit)}…`;
@@ -732,6 +784,7 @@ export class ClaudeRuntime implements Runtime {
 
     let announcedSession = false;
     let pendingAssistantText: string[] = [];
+    const startedCalls = new Map<string, ToolCall>();
     for await (const message of activeQuery) {
       if (
         !announcedSession &&
@@ -747,7 +800,26 @@ export class ClaudeRuntime implements Runtime {
       if (message.type === "assistant") {
         for (const body of pendingAssistantText)
           yield { type: "progress", body };
-        pendingAssistantText = textFromContent(message.message.content);
+        pendingAssistantText = [];
+        const calls = toolCalls(message.message.content);
+        if (calls.length === 0) {
+          // Held back one message: only the last assistant text can repeat the
+          // final result, and this is not yet known to be the last.
+          pendingAssistantText = textFromContent(message.message.content);
+        } else {
+          // A message that calls a tool is never the last one, so its text can
+          // go out now and stay ahead of the calls it introduces.
+          for (const body of textFromContent(message.message.content))
+            yield { type: "progress", body };
+          for (const call of calls) {
+            startedCalls.set(call.id, call);
+            yield {
+              type: "tool_started",
+              action: call.action,
+              parameter: call.parameter,
+            };
+          }
+        }
         if (message.error) yield { type: "error", message: message.error };
         continue;
       }
@@ -764,6 +836,19 @@ export class ClaudeRuntime implements Runtime {
           };
         }
         return;
+      }
+      if (message.type === "user") {
+        for (const finished of toolResults(message.message.content)) {
+          const started = startedCalls.get(finished.id);
+          if (started === undefined) continue;
+          startedCalls.delete(finished.id);
+          yield {
+            type: "tool_finished",
+            action: started.action,
+            parameter: started.parameter,
+            result: finished.result,
+          };
+        }
       }
       for (const body of pendingAssistantText) yield { type: "progress", body };
       pendingAssistantText = [];

@@ -43,6 +43,34 @@ const assistantMessage = (text: string): SDKMessage =>
     message: { content: [{ type: "text", text }] },
   }) as unknown as SDKMessage;
 
+const toolUseMessage = (
+  text: string,
+  id: string,
+  name: string,
+  input: Record<string, unknown>,
+): SDKMessage =>
+  ({
+    type: "assistant",
+    session_id: "runtime-1",
+    message: {
+      content: [
+        { type: "text", text },
+        { type: "tool_use", id, name, input },
+      ],
+    },
+  }) as unknown as SDKMessage;
+
+const toolResultMessage = (toolUseId: string, result: string): SDKMessage =>
+  ({
+    type: "user",
+    session_id: "runtime-1",
+    message: {
+      content: [
+        { type: "tool_result", tool_use_id: toolUseId, content: result },
+      ],
+    },
+  }) as unknown as SDKMessage;
+
 describe("ClaudeRuntime", () => {
   it("does not emit the same assistant text as both progress and final", async () => {
     const sdkQuery = vi.fn(() =>
@@ -341,6 +369,41 @@ describe("ClaudeRuntime", () => {
     });
     for (const key of ["settingSources", "env", "mcpServers"])
       expect(Object.hasOwn(captured ?? {}, key), key).toBe(false);
+  });
+
+  it("reports a tool call as a start and a finish", async () => {
+    const sdkQuery = vi.fn(() =>
+      fakeQuery([
+        toolUseMessage("Checking the vault", "call-1", "Bash", {
+          command: "op whoami",
+        }),
+        toolResultMessage("call-1", "user@example.com"),
+        resultMessage("done"),
+      ]),
+    );
+    const turn = new ClaudeRuntime(sdkQuery as never).start({
+      cwd: "/repo/worktree",
+      additionalDirectories: [],
+      prompt: "who am i",
+      runtimeState: null,
+      requestInteraction: vi.fn(),
+    });
+    const events: unknown[] = [];
+    for await (const event of turn.events) events.push(event);
+    expect(events).toEqual([
+      { type: "session_started", runtimeSessionId: "runtime-1" },
+      // A message that calls a tool cannot be the final one, so its text goes
+      // out ahead of the call rather than being held back a message.
+      { type: "progress", body: "Checking the vault" },
+      { type: "tool_started", action: "Bash", parameter: "op whoami" },
+      {
+        type: "tool_finished",
+        action: "Bash",
+        parameter: "op whoami",
+        result: "user@example.com",
+      },
+      { type: "final", body: "done" },
+    ]);
   });
 
   it("keeps a multi-part question partial until every part is answered", () => {

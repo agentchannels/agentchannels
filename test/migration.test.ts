@@ -178,6 +178,15 @@ describe("local database migrations", () => {
       expect(migrated.listAccess("bd_cascade")).toHaveLength(1);
       expect(migrated.getSession("ss_cascade")?.worktreePath).toBe("/worktree");
       expect(migrated.claimDueDeliveries(10)).toHaveLength(1);
+      // The rebuild is what widened the delivery kinds; tool calls are new.
+      expect(() =>
+        migrated.enqueueDelivery({
+          connector: "linear",
+          remoteConversationId: "thread",
+          kind: "action",
+          body: "op whoami",
+        }),
+      ).not.toThrow();
       expect(
         migrated.db.pragma("foreign_keys", { simple: true }) as number,
       ).toBe(1);

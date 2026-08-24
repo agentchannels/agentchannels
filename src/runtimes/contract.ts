@@ -13,6 +13,13 @@ export type RuntimeInteractionRequest = {
 export type RuntimeEvent =
   | { type: "session_started"; runtimeSessionId: string }
   | { type: "progress"; body: string }
+  /**
+   * A tool call, split in two because a channel activity cannot be edited once
+   * posted. The started event carries no result and is the one a channel may
+   * render as transient; the finished event is the durable record.
+   */
+  | { type: "tool_started"; action: string; parameter: string }
+  | { type: "tool_finished"; action: string; parameter: string; result: string }
   | { type: "final"; body: string }
   | { type: "error"; message: string };
 

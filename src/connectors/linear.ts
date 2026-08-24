@@ -275,6 +275,19 @@ function selectOptions(
 }
 
 function contentFor(message: DeliveryMessage): JsonObject {
+  const metadata = objectValue(message.metadata);
+  if (message.kind === "action") {
+    // Linear renders an action with its own icon, a monospace parameter, and a
+    // collapsible result panel. An activity cannot be edited after it is
+    // posted, so the result arrives as a second activity rather than an update.
+    const result = stringValue(metadata?.result);
+    return {
+      type: "action",
+      action: stringValue(metadata?.action) ?? "Tool",
+      parameter: message.body,
+      ...(result === undefined ? {} : { result }),
+    };
+  }
   const type =
     message.kind === "final" || message.kind === "stopped"
       ? "response"
@@ -465,6 +478,9 @@ export class LinearConnector implements Connector, ConnectorModule {
       input.signal = "select";
       input.signalMetadata = { options };
     }
+    // The opening half of a tool call is worth showing while it runs and not
+    // worth keeping once the result lands beside it.
+    if (metadata?.ephemeral === true) input.ephemeral = true;
     const result = await this.graphql(
       `mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
         agentActivityCreate(input: $input) { success agentActivity { id } }

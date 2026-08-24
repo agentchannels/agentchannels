@@ -3,6 +3,7 @@ import type {
   Agent,
   Binding,
   ConnectorType,
+  DeliveryKind,
   Interaction,
   InteractionKind,
   InteractionStatus,
@@ -75,14 +76,7 @@ export type Delivery = {
   sessionId: string | null;
   connector: ConnectorType;
   remoteConversationId: string;
-  kind:
-    | "progress"
-    | "final"
-    | "question"
-    | "permission"
-    | "plan"
-    | "stopped"
-    | "error";
+  kind: DeliveryKind;
   body: string;
   metadata: Record<string, unknown> | null;
   status: DeliveryStatus;

@@ -307,6 +307,16 @@ export class SessionCoordinator {
           );
         if (event.type === "progress")
           this.enqueue(session, "progress", event.body);
+        if (event.type === "tool_started")
+          this.enqueue(session, "action", event.parameter || event.action, {
+            action: event.action,
+            ephemeral: true,
+          });
+        if (event.type === "tool_finished")
+          this.enqueue(session, "action", event.parameter || event.action, {
+            action: event.action,
+            result: event.result,
+          });
         if (event.type === "final") this.enqueue(session, "final", event.body);
         if (event.type === "error") runtimeError = event.message;
       }

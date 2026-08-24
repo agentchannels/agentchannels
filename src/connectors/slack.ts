@@ -459,17 +459,33 @@ export class SlackConnector implements Connector, ConnectorModule {
         "Slack Bot Token is missing.",
       );
     const metadata = objectValue(message.metadata);
+    // Slack has no transient thread activity and no collapsible result panel,
+    // so a tool call is one context line posted when it finishes. The opening
+    // half is a Linear affordance and has no Slack rendering; dropping it here
+    // is deliberate, and the finished half carries the same call.
+    if (message.kind === "action" && metadata?.ephemeral === true) return;
     const [channel, ...threadParts] = message.remoteConversationId.split(":");
+    const action =
+      message.kind === "action"
+        ? (stringValue(metadata?.action) ?? "Tool")
+        : undefined;
     const body: Record<string, unknown> = {
       channel: channel ?? message.remoteConversationId,
-      text: message.body,
+      text: action === undefined ? message.body : `${action} ${message.body}`,
     };
     const threadTs =
       stringValue(metadata?.threadTs) ?? stringValue(metadata?.thread_ts);
     if (threadTs ?? threadParts.length > 0)
       body.thread_ts = threadTs ?? threadParts.join(":");
     if (Array.isArray(metadata?.blocks)) body.blocks = metadata.blocks;
-    else if (
+    else if (action !== undefined) {
+      body.blocks = [
+        {
+          type: "context",
+          elements: [{ type: "mrkdwn", text: `\`${action}\` ${message.body}` }],
+        },
+      ];
+    } else if (
       message.kind === "question" ||
       message.kind === "permission" ||
       message.kind === "plan"
