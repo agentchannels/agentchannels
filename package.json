@@ -2,6 +2,8 @@
   "name": "agentchannels",
   "version": "1.0.0",
   "description": "Connect an existing local Claude Code environment to Slack and Linear.",
+  "license": "Apache-2.0",
+  "author": "AgentChannels",
   "type": "module",
   "bin": {
     "agentchannels": "dist/cli.js"
