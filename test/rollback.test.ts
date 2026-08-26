@@ -5,6 +5,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { Persistence } from "../src/store/store.ts";
+import { PRODUCT_VERSION } from "../src/version.ts";
 
 const temporaryDirectories: string[] = [];
 afterEach(() => {
@@ -146,7 +147,9 @@ describe("local database rollback", () => {
     ).toBe("https://old.example.com");
     restored.close();
     expect(
-      readdirSync(root).some((name) => name.includes(".pre-restore-v1.0.0-")),
+      readdirSync(root).some((name) =>
+        name.includes(`.pre-restore-v${PRODUCT_VERSION}-`),
+      ),
     ).toBe(true);
   });
 });

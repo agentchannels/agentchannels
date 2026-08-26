@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { Persistence } from "../src/store/store.ts";
+import { PRODUCT_VERSION } from "../src/version.ts";
 import { cleanupFixtures, repositoryFixture } from "./helpers/fixtures.ts";
 
 const node = process.execPath;
@@ -37,7 +38,7 @@ describe("CLI process boundary", () => {
   it("treats version and help display as successful output", () => {
     const version = run(["--version"]);
     expect(version.status).toBe(0);
-    expect(version.stdout.trim()).toBe("1.0.0");
+    expect(version.stdout.trim()).toBe(PRODUCT_VERSION);
     expect(version.stderr).toBe("");
 
     const help = run(["--help"]);
