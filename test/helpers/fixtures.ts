@@ -3,6 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { DeliveryMessage } from "../../src/model.ts";
 import type { CredentialStore } from "../../src/security/keyring.ts";
 
 /**
@@ -104,6 +105,18 @@ export async function waitUntil(
       throw new Error(`Timed out waiting for ${description}`);
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
+}
+
+/** A delivery with the shape the engine enqueues, so suites do not each invent one. */
+export function deliveryMessage(
+  overrides: Partial<DeliveryMessage> = {},
+): DeliveryMessage {
+  return {
+    kind: "final",
+    remoteConversationId: "C123",
+    body: "done",
+    ...overrides,
+  };
 }
 
 export function cleanupFixtures(): void {
