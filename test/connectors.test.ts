@@ -178,6 +178,40 @@ describe("Slack connector", () => {
     ]);
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+
+  it("reads an interaction id from a suffixed block id and a compact value", () => {
+    const interactionId = `ix_${"a".repeat(32)}`;
+    const body =
+      "payload=" +
+      encodeURIComponent(
+        JSON.stringify({
+          type: "block_actions",
+          user: { id: "U1" },
+          channel: { id: "C1" },
+          message: { ts: "2.3" },
+          actions: [
+            {
+              action_id: "agentchannels_interaction:0:1",
+              block_id: `${interactionId}:0:0`,
+              value: `${interactionId}:0:Approve this plan`,
+            },
+          ],
+        }),
+      );
+    expect(
+      new SlackConnector().verifyAndParse(
+        slackRequest(body, "slack-secret", "application/x-www-form-urlencoded"),
+        { signingSecret: "slack-secret" },
+      ),
+    ).toMatchObject({
+      ok: true,
+      command: {
+        type: "interaction_response",
+        interactionId,
+        response: { questionIndex: 0, answer: "Approve this plan" },
+      },
+    });
+  });
 });
 
 describe("Linear connector", () => {

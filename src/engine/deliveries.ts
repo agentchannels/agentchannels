@@ -1,9 +1,16 @@
 import type { Connector } from "../connectors/connector.ts";
-import type { ConnectorType, DeliveryMessage } from "../model.ts";
+import type { ConnectorType, DeliveryKind, DeliveryMessage } from "../model.ts";
 import type { Persistence } from "../store/store.ts";
 import type { BindingCredentialService } from "../security/identity.ts";
 import { redactSensitiveText } from "../security/redact.ts";
 import { internalError, invalidState } from "../errors.ts";
+
+export type PermanentDeliveryFailure = Readonly<{
+  deliveryId: string;
+  connector: ConnectorType;
+  kind: DeliveryKind;
+  detail: string;
+}>;
 
 export type DeliveryWorkerOptions = {
   store: Persistence;
@@ -11,6 +18,7 @@ export type DeliveryWorkerOptions = {
   connectors: ReadonlyMap<ConnectorType, Connector>;
   maxAttempts?: number;
   now?: () => Date;
+  onPermanentFailure?: (failure: PermanentDeliveryFailure) => void;
 };
 
 export class DeliveryWorker {
@@ -68,6 +76,13 @@ export class DeliveryWorker {
             detail,
             this.now(),
           );
+          this.options.onPermanentFailure?.({
+            deliveryId: delivery.id,
+            connector: delivery.connector,
+            kind: delivery.kind,
+            detail,
+          });
+          this.announceFailure(delivery, detail);
         } else {
           const delayMs = Math.min(
             1_000 * 2 ** (delivery.attempts - 1),
@@ -83,5 +98,27 @@ export class DeliveryWorker {
       }
     }
     return deliveries.length;
+  }
+
+  private announceFailure(
+    delivery: ReturnType<Persistence["claimDueDeliveries"]>[number],
+    detail: string,
+  ): void {
+    const metadata = delivery.metadata;
+    if (metadata === null) return;
+    if (metadata.deliveryFallbackFor !== undefined) return;
+    const bindingId =
+      typeof metadata.bindingId === "string" ? metadata.bindingId : undefined;
+    if (bindingId === undefined) return;
+    this.options.store.enqueueDelivery({
+      ...(delivery.sessionId === null ? {} : { sessionId: delivery.sessionId }),
+      connector: delivery.connector,
+      remoteConversationId: delivery.remoteConversationId,
+      kind: "error",
+      body: `A ${delivery.kind} message could not be delivered to this channel after ${String(this.maxAttempts)} attempts. ${detail}`,
+      metadata: { bindingId, deliveryFallbackFor: delivery.id },
+      createdAt: this.now(),
+      nextAttemptAt: this.now(),
+    });
   }
 }

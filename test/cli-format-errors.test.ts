@@ -408,6 +408,7 @@ describe("installation overview rendering", () => {
       bindings: [],
       pendingSetups: [],
       sessions: [],
+      failedDeliveries: 0,
     };
     const output = renderOverview(value);
     expect(output).not.toContain("Next:");
@@ -431,6 +432,7 @@ describe("installation overview rendering", () => {
         } as InstallationOverview["pendingSetups"][number],
       ],
       sessions: [],
+      failedDeliveries: 0,
     };
     const output = renderOverview(value);
     expect(output).toContain("slack: admin_action");
