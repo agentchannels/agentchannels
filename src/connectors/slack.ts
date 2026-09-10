@@ -25,6 +25,10 @@ import type {
   VerifiedConnectorCredentials,
   VerificationResult,
 } from "./connector.ts";
+import {
+  decodeInteractionEnvelope,
+  renderSlackMessage,
+} from "./slack-blocks.ts";
 import type {
   ConnectorCommand,
   DeliveryMessage,
@@ -151,13 +155,12 @@ function actionValue(payload: JsonObject): string | undefined {
   return stringValue(action?.value) ?? stringValue(action?.selected_option);
 }
 
-function encodedActionValue(value: string | undefined): JsonObject | undefined {
-  if (!value) return undefined;
-  try {
-    return objectValue(JSON.parse(value));
-  } catch {
-    return undefined;
-  }
+function decodedActionValue(value: string | undefined) {
+  return value === undefined ? undefined : decodeInteractionEnvelope(value);
+}
+
+function interactionIdFromBlock(blockId: string | undefined) {
+  return blockId?.split(":")[0];
 }
 
 function parseInteraction(
@@ -176,13 +179,13 @@ function parseInteraction(
     ""
   ).toLowerCase();
   const value = actionValue(payload);
-  const encoded = encodedActionValue(value);
+  const decoded = decodedActionValue(value);
   const selectedOptions = Array.isArray(firstAction?.selected_options)
     ? firstAction.selected_options
         .map((option) =>
-          encodedActionValue(stringValue(objectValue(option)?.value)),
+          decodedActionValue(stringValue(objectValue(option)?.value)),
         )
-        .filter((option): option is JsonObject => option !== undefined)
+        .filter((option) => option !== undefined)
     : [];
   const normalizedValue = (value ?? "").toLowerCase();
   if (
@@ -197,9 +200,9 @@ function parseInteraction(
 
   const interactionId =
     stringValue(firstAction?.interaction_id) ??
-    stringValue(firstAction?.block_id) ??
-    stringValue(encoded?.interactionId) ??
-    stringValue(selectedOptions[0]?.interactionId) ??
+    interactionIdFromBlock(stringValue(firstAction?.block_id)) ??
+    decoded?.interactionId ??
+    selectedOptions[0]?.interactionId ??
     stringValue(payload.interaction_id) ??
     stringValue(payload.callback_id);
   if (!interactionId) return undefined;
@@ -212,10 +215,10 @@ function parseInteraction(
           answer: selectedOptions.map((option) => option.response),
         }
       : undefined) ??
-    (encoded !== undefined
-      ? typeof encoded.questionIndex === "number"
-        ? { questionIndex: encoded.questionIndex, answer: encoded.response }
-        : encoded.response
+    (decoded !== undefined
+      ? decoded.questionIndex !== undefined
+        ? { questionIndex: decoded.questionIndex, answer: decoded.response }
+        : decoded.response
       : undefined) ??
     selectedOption ??
     stringValue(firstAction?.selected_date) ??
@@ -459,168 +462,7 @@ export class SlackConnector implements Connector, ConnectorModule {
         "Slack Bot Token is missing.",
       );
     const metadata = objectValue(message.metadata);
-    // Slack has no transient thread activity and no collapsible result panel,
-    // so a tool call is one context line posted when it finishes. The opening
-    // half is a Linear affordance and has no Slack rendering; dropping it here
-    // is deliberate, and the finished half carries the same call.
     if (message.kind === "action" && metadata?.ephemeral === true) return;
-    const [channel, ...threadParts] = message.remoteConversationId.split(":");
-    const action =
-      message.kind === "action"
-        ? (stringValue(metadata?.action) ?? "Tool")
-        : undefined;
-    const body: Record<string, unknown> = {
-      channel: channel ?? message.remoteConversationId,
-      text: action === undefined ? message.body : `${action} ${message.body}`,
-    };
-    const threadTs =
-      stringValue(metadata?.threadTs) ?? stringValue(metadata?.thread_ts);
-    if (threadTs ?? threadParts.length > 0)
-      body.thread_ts = threadTs ?? threadParts.join(":");
-    if (Array.isArray(metadata?.blocks)) body.blocks = metadata.blocks;
-    else if (action !== undefined) {
-      body.blocks = [
-        {
-          type: "context",
-          elements: [{ type: "mrkdwn", text: `\`${action}\` ${message.body}` }],
-        },
-      ];
-    } else if (
-      message.kind === "question" ||
-      message.kind === "permission" ||
-      message.kind === "plan"
-    ) {
-      const interactionId =
-        stringValue(metadata?.interactionId) ??
-        stringValue(metadata?.interaction_id) ??
-        "interaction";
-      const options = Array.isArray(metadata?.options) ? metadata.options : [];
-      const optionButtons = options.map((option, index) => {
-        const parsed = objectValue(option);
-        const label =
-          stringValue(parsed?.label) ??
-          stringValue(parsed?.value) ??
-          `Option ${(index + 1).toString()}`;
-        const value = stringValue(parsed?.value) ?? label;
-        return {
-          type: "button",
-          text: { type: "plain_text", text: label },
-          action_id: "agentchannels_interaction",
-          value: JSON.stringify({ interactionId, response: value }),
-        };
-      });
-      const questions = Array.isArray(metadata?.questions)
-        ? metadata.questions.map((question) => objectValue(question) ?? {})
-        : [];
-      const questionBlocks = questions.flatMap(
-        (question, questionIndex): Record<string, unknown>[] => {
-          const questionText =
-            stringValue(question.question) ??
-            `Question ${(questionIndex + 1).toString()}`;
-          const questionOptions = Array.isArray(question.options)
-            ? question.options.map((option) => objectValue(option) ?? {})
-            : [];
-          const descriptions = questionOptions
-            .map((option) => {
-              const label = stringValue(option.label) ?? "Option";
-              const description = stringValue(option.description);
-              return description === undefined
-                ? `• ${label}`
-                : `• *${label}* — ${description}`;
-            })
-            .join("\n");
-          const section = {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: `*${questionText}*${descriptions === "" ? "\nReply in this thread with your answer." : `\n${descriptions}`}`,
-            },
-          };
-          if (questionOptions.length === 0) return [section];
-          if (question.multiSelect === true) {
-            return [
-              section,
-              {
-                type: "actions",
-                block_id: interactionId,
-                elements: [
-                  {
-                    type: "multi_static_select",
-                    action_id: "agentchannels_interaction",
-                    placeholder: {
-                      type: "plain_text",
-                      text: "Select all that apply",
-                    },
-                    options: questionOptions.map((option, optionIndex) => {
-                      const label =
-                        stringValue(option.label) ??
-                        `Option ${(optionIndex + 1).toString()}`;
-                      return {
-                        text: { type: "plain_text", text: label },
-                        value: JSON.stringify({
-                          interactionId,
-                          questionIndex,
-                          response: label,
-                        }),
-                      };
-                    }),
-                  },
-                ],
-              },
-            ];
-          }
-          return [
-            section,
-            {
-              type: "actions",
-              block_id: interactionId,
-              elements: questionOptions.map((option, optionIndex) => {
-                const label =
-                  stringValue(option.label) ??
-                  `Option ${(optionIndex + 1).toString()}`;
-                return {
-                  type: "button",
-                  text: { type: "plain_text", text: label },
-                  action_id: "agentchannels_interaction",
-                  value: JSON.stringify({
-                    interactionId,
-                    questionIndex,
-                    response: label,
-                  }),
-                };
-              }),
-            },
-          ];
-        },
-      );
-      body.blocks = [
-        { type: "section", text: { type: "mrkdwn", text: message.body } },
-        ...questionBlocks,
-        ...(questionBlocks.length === 0 && optionButtons.length > 0
-          ? [
-              {
-                type: "actions",
-                block_id: interactionId,
-                elements: optionButtons,
-              },
-            ]
-          : []),
-        {
-          type: "actions",
-          elements: [
-            {
-              type: "button",
-              text: { type: "plain_text", text: "Stop" },
-              style: "danger",
-              action_id: "agentchannels_stop",
-              value: "stop",
-            },
-          ],
-        },
-      ];
-    }
-    if (Array.isArray(metadata?.attachments))
-      body.attachments = metadata.attachments;
 
     const response = await this.fetcher(`${this.apiBaseUrl}/chat.postMessage`, {
       method: "POST",
@@ -628,7 +470,7 @@ export class SlackConnector implements Connector, ConnectorModule {
         authorization: `Bearer ${token}`,
         "content-type": "application/json; charset=utf-8",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(renderSlackMessage(message)),
     });
     const parsed = await parseJsonResponse(response);
     if (!response.ok || parsed.ok !== true) {
