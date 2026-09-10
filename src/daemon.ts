@@ -115,6 +115,11 @@ export async function startDaemon(options: DaemonOptions): Promise<void> {
     store,
     credentials: bindingCredentials,
     connectors,
+    onPermanentFailure: (failure) => {
+      log.error(
+        `Delivery ${failure.deliveryId} (${failure.kind} via ${failure.connector}) was not delivered: ${failure.detail}`,
+      );
+    },
   });
   const retention = new SessionRetentionCleaner(store, paths.worktrees);
   await retention.clean();

@@ -870,6 +870,24 @@ export class Persistence {
       .get(deliveryId) as Record<string, unknown> | undefined;
     return row ? mapDelivery(row) : undefined;
   }
+  countFailedDeliveries(bindingIds?: readonly string[]): number {
+    if (bindingIds === undefined) {
+      const row = this.db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM deliveries WHERE status='failed'",
+        )
+        .get() as { count: number };
+      return row.count;
+    }
+    if (bindingIds.length === 0) return 0;
+    const placeholders = bindingIds.map(() => "?").join(",");
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM deliveries WHERE status='failed' AND json_extract(metadata_json,'$.bindingId') IN (${placeholders})`,
+      )
+      .get(...bindingIds) as { count: number };
+    return row.count;
+  }
   claimDueDeliveries(limit: number, at = new Date()): Delivery[] {
     return this.transaction(() => {
       const rows = this.db

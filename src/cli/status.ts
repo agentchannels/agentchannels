@@ -18,6 +18,7 @@ export type InstallationOverview = Readonly<{
   bindings: ReturnType<Persistence["listAllBindings"]>;
   pendingSetups: ReturnType<Persistence["listAllBindingSetups"]>;
   sessions: ReturnType<Persistence["listSessions"]>;
+  failedDeliveries: number;
   daemon?: ServiceStatus;
 }>;
 
@@ -47,6 +48,7 @@ export function installationOverview(
       bindings: [],
       pendingSetups: [],
       sessions: [],
+      failedDeliveries: 0,
       ...(daemon === undefined ? {} : { daemon }),
     };
   }
@@ -77,6 +79,7 @@ export function installationOverview(
     .listSessions()
     .filter((session) => bindingIds.has(session.bindingId));
   const installation = store.getInstallationState();
+  const failedDeliveries = store.countFailedDeliveries([...bindingIds]);
   const failures = pendingSetups.filter(
     (setup) => setup.lastError !== null && setup.lastError.trim().length > 0,
   );
@@ -108,10 +111,14 @@ export function installationOverview(
                       ? "Run agentchannels daemon install."
                       : "Run agentchannels daemon in the foreground.",
                 ]
-              : [];
+              : failedDeliveries > 0
+                ? [
+                    `${String(failedDeliveries)} channel message(s) could not be delivered. Check the daemon log.`,
+                  ]
+                : [];
   return {
     status:
-      failures.length > 0
+      failures.length > 0 || failedDeliveries > 0
         ? "degraded"
         : actionRequired
           ? "action_required"
@@ -133,6 +140,7 @@ export function installationOverview(
     bindings,
     pendingSetups,
     sessions,
+    failedDeliveries,
     ...(daemon === undefined ? {} : { daemon }),
   };
 }
@@ -194,7 +202,15 @@ export function renderOverview(
     for (const session of value.sessions)
       lines.push(`- ${redactSensitiveText(session.status)}`);
   }
-  if (value.actionRequired && value.nextSteps[0] !== undefined)
+  if (value.failedDeliveries > 0)
+    lines.push(
+      "",
+      `Undelivered channel messages: ${String(value.failedDeliveries)}`,
+    );
+  if (
+    (value.actionRequired || value.failedDeliveries > 0) &&
+    value.nextSteps[0] !== undefined
+  )
     lines.push("", formatter.pending(redactSensitiveText(value.nextSteps[0])));
   return lines.join("\n");
 }
