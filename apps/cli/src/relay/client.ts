@@ -7,7 +7,7 @@ import {
   relayToLocalMessageSchema,
   type LocalToRelayMessage,
   type RelayToLocalMessage,
-} from "../relay/protocol.ts";
+} from "@agentchannels/protocol";
 import type { InstallationIdentityService } from "../security/identity.ts";
 import type { RelayEndpoints } from "../relay/origin.ts";
 

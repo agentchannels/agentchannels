@@ -123,6 +123,30 @@
           }
         }
       }
+    },
+    {
+      "includes": ["packages/protocol/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**/apps/**",
+                      "agentchannels",
+                      "agentchannels/**"
+                    ],
+                    "message": "The protocol is shared by both apps and must not depend on either."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }

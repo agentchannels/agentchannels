@@ -7,7 +7,7 @@ import {
   connectorRegistry,
 } from "../src/connectors/registry.ts";
 import { isConnectorType } from "../src/model.ts";
-import { connectorTypeSchema } from "../src/relay/protocol.ts";
+import { connectorTypeSchema } from "@agentchannels/protocol";
 import { CURRENT_SCHEMA_VERSION } from "../src/store/migrations.ts";
 import { Persistence } from "../src/store/store.ts";
 

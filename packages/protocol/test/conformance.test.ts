@@ -1,22 +1,26 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "bun:test";
+import { z } from "zod";
+
 import {
   localToRelayMessageSchema,
   relayToLocalMessageSchema,
-} from "../src/relay/protocol.ts";
+} from "../src/index.ts";
+import v1 from "./v1.json" with { type: "json" };
 
-type Fixture = {
-  protocol: number;
-  accepted: { direction: "relayToLocal" | "localToRelay"; message: unknown }[];
-  rejected: { errorCode: string; message: unknown }[];
-};
-
-const fixture = JSON.parse(
-  readFileSync(
-    new URL("../fixtures/protocol-v1.json", import.meta.url),
-    "utf8",
-  ),
-) as Fixture;
+const fixture = z
+  .object({
+    protocol: z.number(),
+    accepted: z.array(
+      z.object({
+        direction: z.enum(["relayToLocal", "localToRelay"]),
+        message: z.unknown(),
+      }),
+    ),
+    rejected: z.array(
+      z.object({ errorCode: z.string(), message: z.unknown() }),
+    ),
+  })
+  .parse(v1);
 
 describe("protocol 1 conformance fixture", () => {
   it("accepts every Relay-to-local fixture message", () => {

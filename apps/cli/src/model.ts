@@ -1,3 +1,5 @@
+import { isIdentifier } from "@agentchannels/protocol";
+
 export const sessionStatuses = [
   "queued",
   "running",
@@ -21,14 +23,12 @@ export type SessionStatus = (typeof sessionStatuses)[number];
 export type ConnectorType = string;
 export type RuntimeType = string;
 
-const IDENTIFIER = /^[a-z][a-z0-9_-]{0,31}$/;
-
 export function isConnectorType(value: string): value is ConnectorType {
-  return IDENTIFIER.test(value);
+  return isIdentifier(value);
 }
 
 export function isRuntimeType(value: string): value is RuntimeType {
-  return IDENTIFIER.test(value);
+  return isIdentifier(value);
 }
 
 export type Agent = {
