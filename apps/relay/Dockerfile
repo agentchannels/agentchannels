@@ -1,4 +1,6 @@
-FROM oven/bun:1.4.0 AS builder
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.0 AS builder
+
+ARG TARGETARCH
 
 WORKDIR /build
 COPY package.json bun.lock bunfig.toml ./
@@ -9,6 +11,7 @@ RUN bun install --frozen-lockfile --filter agentchannels-relay
 COPY packages/protocol packages/protocol
 COPY apps/relay apps/relay
 RUN bun build apps/relay/src/main.ts --compile --minify \
+      --target="bun-linux-$([ "$TARGETARCH" = amd64 ] && echo x64 || echo "$TARGETARCH")" \
       --outfile /build/agentchannels-relay
 
 FROM debian:bookworm-slim AS runtime

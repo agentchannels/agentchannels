@@ -1,0 +1,85 @@
+name: Deploy relay
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - apps/relay/**
+      - packages/protocol/**
+      - bun.lock
+      - bunfig.toml
+      - package.json
+      - .github/workflows/deploy-relay.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-relay
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify workspace
+        run: bun run check
+
+      - name: Pair with the last released CLI
+        run: bun apps/relay/scripts/released-cli-protocol.ts
+
+      - name: Verify the hardened relay container
+        run: apps/relay/scripts/verify-container.sh
+
+      - name: Resolve image tags
+        id: tags
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/agentchannels-relay"
+          version=$(bun -p 'require("./apps/relay/package.json").version')
+          tags="$image:sha-${GITHUB_SHA::12},$image:latest"
+          if ! docker buildx imagetools inspect "$image:$version" >/dev/null 2>&1; then
+            tags="$tags,$image:$version"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: apps/relay/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          pull: true
+          push: true
+          provenance: mode=max
+          tags: ${{ steps.tags.outputs.tags }}
