@@ -9,27 +9,20 @@ conventional: the keyring service name is derived from the product home, so any
 run under `--home` or `AGENTCHANNELS_HOME` addresses its own namespace and cannot
 read or delete the operator's installation identity.
 
-## Source and package smoke
+## Source and binary smoke
 
-The source-checkout path is verified from a missing `dist` directory: `pnpm
-start -- --help` runs `src/cli.ts` through Node's built-in type stripping, so
-there is no build step, no build lock, and no build-tool output on stdout. This
-requires Node.js 24; the packaged CLI runs compiled JavaScript and is smoke-tested
-on both Node.js 22 and 24, the declared `engines` range.
-
-The release path packs the built `dist` tree and `scripts/restore-database.mjs`
-only, installs that tarball into a temporary pnpm project, and runs
-`scripts/first-run-smoke.mjs`. The smoke covers version/help, local-only init,
-idempotent re-entry, global status, and Ctrl-C cancellation in temporary Git
-repositories and homes. It does not contact a provider, install an OS service,
-or use the operator's home directory.
+The source path runs `apps/cli/src/cli.ts` directly with Bun, so there is no
+build step and no build output on stdout. The distributed path is a compiled
+binary: `test/packaging.test.ts` runs it from outside the source tree, and
+`test/cli-process.acceptance.test.ts` drives version and help, local-only init,
+idempotent re-entry, global status, and Ctrl-C cancellation through it in
+temporary Git repositories and homes. Neither contacts a provider, installs an
+OS service, or uses the operator's home directory. The release workflow repeats
+the smoke on each platform's own binary.
 
 ## Terminal prompts
 
-The human path uses `@inquirer/prompts` only through `PromptIO`. The package's
-7.5.x line declares `engines.node >=18`, so it covers every supported Node 22
-runtime. The project pins 7.5.3 while it promises all Node 22 versions; the current
-main package has a newer engine range (`>=23.5.0 || ^22.13.0 || ^20.17.0`).
+The human path uses `@inquirer/prompts` only through `PromptIO`, pinned at 7.5.3.
 
 Select prompts use arrow keys and Enter; checkbox prompts use arrows, Space, and
 Enter; password prompts hide input. Inquirer requires an interactive TTY for

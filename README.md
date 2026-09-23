@@ -10,18 +10,25 @@ Connector credentials and the installation private key are stored in the operati
 
 ## Requirements
 
-- Node.js 22 or newer to run AgentChannels (Node.js 24 or newer to develop it)
-- pnpm
+- macOS or Linux
+- Claude Code installed, authenticated, and on `PATH` as `claude`
 - A Git repository with a current `HEAD`
 - Local Claude Code authentication and configuration
 - A reachable Relay endpoint when self-hosting
 - Slack or Linear workspace administrator access for application setup
 
-## Install from source
+## Install
+
+Download the binary for your platform from the
+[latest release](https://github.com/agentchannels/agentchannels/releases/latest),
+check it against `SHA256SUMS`, and put it on your `PATH` as `agentchannels`.
+
+To build from source with [Bun](https://bun.com):
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm start -- init
+bun install --frozen-lockfile
+bun run --filter agentchannels build
+./apps/cli/dist/agentchannels init
 ```
 
 ## Quick start
@@ -98,19 +105,34 @@ Add `--json` to supported commands for machine-readable output. Use `--agent ag_
 ## Restore a migration backup
 
 Stop the daemon before restoring. Backup filenames identify the AgentChannels
-version, source schema, and creation time. The restore command preserves the
-current database and requires explicit acknowledgment that newer state may be
-lost:
+version, source schema, and creation time. The current database is preserved
+beside itself, and the command requires explicit acknowledgment that newer state
+may be lost:
 
 ```sh
-node scripts/restore-database.mjs \
-  --database ~/.agentchannels/agentchannels.db \
-  --backup ~/.agentchannels/backups/agentchannels-v1.0.0-schema-1-TIMESTAMP.db \
+agentchannels database restore \
+  --backup ~/.agentchannels/backups/agentchannels-v0.3.0-schema-5-TIMESTAMP.db \
   --acknowledge-post-backup-data-loss
 ```
+
+## Self-hosting the relay
+
+The relay lives in `apps/relay`. See its `AGENTS.md` for configuration. To run
+it with Docker Compose:
+
+```sh
+cd apps/relay
+install -d -m 700 secrets
+openssl rand -hex 32 > secrets/relay-enrollment-token
+chmod 644 secrets/relay-enrollment-token
+AGENTCHANNELS_RELAY_ORIGIN=https://relay.example.com docker compose up -d
+```
+
+Put it behind TLS and rate limiting, and set `AGENTCHANNELS_RELAY_ORIGIN` to the
+public origin installations dial. Authentication is bound to that origin.
 
 ## Development
 
 ```sh
-pnpm check
+bun run check
 ```
