@@ -1,3 +1,4 @@
+import { PROTOCOL } from "@agentchannels/protocol";
 import { createHmac } from "node:crypto";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "bun:test";
@@ -8,6 +9,7 @@ import type { SessionCoordinator } from "../src/engine/coordinator.ts";
 import { IngressService } from "../src/engine/ingress.ts";
 import { RelayClient } from "../src/relay/client.ts";
 import { RelayManager } from "../src/relay/enrollment.ts";
+import { parseRelayOrigin } from "../src/relay/origin.ts";
 import { BindingCredentialCache } from "../src/security/credential-cache.ts";
 import {
   BindingCredentialService,
@@ -163,3 +165,40 @@ it("carries a signed provider webhook through the relay to local verification an
   expect(offline.status).toBe(200);
   expect(await offline.text()).toBe("");
 }, 30_000);
+
+it("tells the operator which release to install when the relay speaks another protocol", async () => {
+  const relay = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (request, server) =>
+      server.upgrade(request, { data: undefined })
+        ? undefined
+        : new Response(null, { status: 426 }),
+    websocket: {
+      open(socket) {
+        socket.send(
+          JSON.stringify({
+            type: "error",
+            protocol: PROTOCOL,
+            code: "unsupported_protocol",
+            message: "protocol 2 is not supported",
+            supported: { min: PROTOCOL + 1, max: PROTOCOL + 2 },
+          }),
+        );
+      },
+      message() {},
+    },
+  });
+  cleanups.push(() => relay.stop(true));
+
+  const client = new RelayClient({
+    endpoints: parseRelayOrigin(`http://127.0.0.1:${String(relay.port)}`),
+    identity: new InstallationIdentityService(new MemoryCredentialStore()),
+    listBindings: () => [],
+    handleWebhook: async () => ({ status: 200 }),
+  });
+  await expect(client.run()).rejects.toMatchObject({
+    code: "RELAY_UNAVAILABLE",
+    message: `The relay speaks protocol ${String(PROTOCOL + 1)}-${String(PROTOCOL + 2)} and this AgentChannels speaks protocol ${String(PROTOCOL)}. Install the AgentChannels release that matches the relay.`,
+  });
+});

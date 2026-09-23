@@ -2,6 +2,7 @@ services:
   relay:
     image: ghcr.io/agentchannels/agentchannels-relay:2.0.0
     environment:
+      AGENTCHANNELS_RELAY_ORIGIN: ${AGENTCHANNELS_RELAY_ORIGIN:?set the public origin installations dial, such as https://relay.example.com}
       AGENTCHANNELS_RELAY_BIND: 0.0.0.0:8787
       AGENTCHANNELS_RELAY_DATABASE: /var/lib/agentchannels-relay/agentchannels-relay.db
       AGENTCHANNELS_RELAY_ENROLLMENT_TOKEN_FILE: /run/secrets/relay_enrollment_token

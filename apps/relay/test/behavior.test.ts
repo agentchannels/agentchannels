@@ -1,3 +1,4 @@
+import { PROTOCOL } from "@agentchannels/protocol";
 import { Database } from "bun:sqlite";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -156,12 +157,46 @@ describe("authentication", () => {
     await peer.closed;
   });
 
+  it("rejects a nonce relayed through another relay", async () => {
+    const target = await relay();
+    const peer = await connect(target, await enrolled(target), {
+      origin: "https://relay.agentchannels.io",
+    });
+    expect(await peer.next()).toMatchObject({
+      type: "error",
+      code: "unauthenticated",
+    });
+    await peer.closed;
+  });
+
+  it("authenticates against the public origin it is configured with", async () => {
+    const target = await relay({
+      environment: { AGENTCHANNELS_RELAY_ORIGIN: "https://relay.example.com/" },
+    });
+    const installation = await enrolled(target);
+    const behindProxy = await connect(target, installation, {
+      origin: "https://relay.example.com",
+    });
+    expect(await behindProxy.next()).toMatchObject({ type: "authenticated" });
+    behindProxy.close();
+
+    const direct = await connect(target, installation);
+    expect(await direct.next()).toMatchObject({
+      type: "error",
+      code: "unauthenticated",
+    });
+    await direct.closed;
+  });
+
   it("names an unsupported protocol explicitly", async () => {
     const target = await relay();
-    const peer = await connect(target, await enrolled(target), 99);
+    const peer = await connect(target, await enrolled(target), {
+      protocol: 99,
+    });
     expect(await peer.next()).toMatchObject({
       type: "error",
       code: "unsupported_protocol",
+      supported: { min: PROTOCOL, max: PROTOCOL },
     });
     await peer.closed;
   });
@@ -170,7 +205,7 @@ describe("authentication", () => {
     const target = await relay();
     const peer = await Peer.open(target);
     await peer.next();
-    peer.send({ type: "sync_bindings", protocol: 1, bindings: [] });
+    peer.send({ type: "sync_bindings", protocol: PROTOCOL, bindings: [] });
     expect(await peer.next()).toMatchObject({
       type: "error",
       code: "invalid_message",
@@ -184,7 +219,7 @@ describe("authentication", () => {
     const peer = await authenticated(target, installation);
     peer.send({
       type: "authenticate",
-      protocol: 1,
+      protocol: PROTOCOL,
       installationId: installation.installationId,
       signatureBase64: "AA==",
     });
@@ -213,7 +248,7 @@ describe("routing", () => {
     const webhook = await peer.next();
     expect(webhook).toMatchObject({
       type: "webhook",
-      protocol: 1,
+      protocol: PROTOCOL,
       bindingId: "bd_route",
       connector: "slack",
       headers: expect.objectContaining({
@@ -231,7 +266,7 @@ describe("routing", () => {
 
     peer.send({
       type: "webhook_response",
-      protocol: 1,
+      protocol: PROTOCOL,
       requestId: webhook.requestId,
       status: 202,
       headers: { "x-local": "yes" },
@@ -331,7 +366,7 @@ describe("routing", () => {
     const webhook = await owner.next();
     owner.send({
       type: "webhook_response",
-      protocol: 1,
+      protocol: PROTOCOL,
       requestId: webhook.requestId,
       status: 200,
     });
@@ -370,7 +405,7 @@ describe("persistence", () => {
     expect(webhook).toMatchObject({ type: "webhook", bindingId: "bd_persist" });
     reconnected.send({
       type: "webhook_response",
-      protocol: 1,
+      protocol: PROTOCOL,
       requestId: webhook.requestId,
       status: 204,
     });
@@ -392,7 +427,7 @@ describe("persistence", () => {
     const webhook = await peer.next();
     peer.send({
       type: "webhook_response",
-      protocol: 1,
+      protocol: PROTOCOL,
       requestId: webhook.requestId,
       status: 200,
     });

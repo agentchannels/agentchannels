@@ -1,12 +1,14 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Server, ServerWebSocket } from "bun";
 import {
+  authenticationPayload,
   isIdentifier,
   type LocalToRelayMessage,
   localToRelayMessageSchema,
   PROTOCOL,
   ROUTE_ID_PATTERN,
   routeIdSchema,
+  SUPPORTED_PROTOCOLS,
 } from "@agentchannels/protocol";
 import { z } from "zod";
 
@@ -30,9 +32,9 @@ type SocketState = {
 
 type Socket = ServerWebSocket<SocketState>;
 
-type Parsed =
-  | Readonly<{ ok: true; message: LocalToRelayMessage }>
-  | Readonly<{ ok: false; code: string; message: string }>;
+type Rejection = Readonly<{ ok: false; frame: string }>;
+
+type Parsed = Readonly<{ ok: true; message: LocalToRelayMessage }> | Rejection;
 
 const enrollmentSchema = z.object({
   installationId: routeIdSchema,
@@ -50,16 +52,16 @@ function errorFrame(code: string, message: string): string {
   return frame({ type: "error", code, message });
 }
 
+function rejection(code: string, message: string): Rejection {
+  return { ok: false, frame: errorFrame(code, message) };
+}
+
 function parseLocalMessage(text: string): Parsed {
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
-    return {
-      ok: false,
-      code: "invalid_message",
-      message: "messages must be JSON",
-    };
+    return rejection("invalid_message", "messages must be JSON");
   }
   const declared =
     typeof value === "object" && value !== null && "protocol" in value
@@ -68,17 +70,17 @@ function parseLocalMessage(text: string): Parsed {
   if (typeof declared === "number" && declared !== PROTOCOL)
     return {
       ok: false,
-      code: "unsupported_protocol",
-      message: `protocol ${String(declared)} is not supported`,
+      frame: frame({
+        type: "error",
+        code: "unsupported_protocol",
+        message: `protocol ${String(declared)} is not supported`,
+        supported: SUPPORTED_PROTOCOLS,
+      }),
     };
   const parsed = localToRelayMessageSchema.safeParse(value);
   return parsed.success
     ? { ok: true, message: parsed.data }
-    : {
-        ok: false,
-        code: "invalid_message",
-        message: "unsupported relay message",
-      };
+    : rejection("invalid_message", "unsupported relay message");
 }
 
 function bearerToken(request: Request): Buffer {
@@ -186,7 +188,15 @@ export function startRelay(
     const publicKey = store.publicKey(message.installationId);
     if (
       publicKey === null ||
-      !signatureIsValid(publicKey, socket.data.nonce, message.signatureBase64)
+      !signatureIsValid(
+        publicKey,
+        authenticationPayload({
+          origin: config.origin,
+          installationId: message.installationId,
+          nonce: socket.data.nonce,
+        }),
+        message.signatureBase64,
+      )
     ) {
       socket.send(
         errorFrame("unauthenticated", "invalid installation authentication"),
@@ -287,13 +297,13 @@ export function startRelay(
         if (connection === null || installationId === null) {
           if (parsed.ok) authenticate(socket, parsed.message);
           else {
-            socket.send(errorFrame(parsed.code, parsed.message));
+            socket.send(parsed.frame);
             socket.close();
           }
           return;
         }
         if (parsed.ok) dispatch(installationId, connection, parsed.message);
-        else connection.notify(errorFrame(parsed.code, parsed.message));
+        else connection.notify(parsed.frame);
       },
       drain(socket) {
         socket.data.connection?.drained();

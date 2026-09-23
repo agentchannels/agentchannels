@@ -25,6 +25,10 @@ a hosted relay because it cannot read or keep what passes through it.
   fail within their budget rather than buffering without limit.
 - One installation has one live connection. A reconnect closes the socket it
   replaces.
+- Authentication signs `authenticationPayload` from `@agentchannels/protocol`:
+  the relay origin, the installation, and the nonce. A signature made for one
+  relay is useless at another, so a relay an operator once tried cannot replay
+  that installation's identity elsewhere.
 - Enrollment tokens are compared in constant time over fixed-width digests, and
   every unauthorized enrollment gets an identical response.
 - Migrations are numbered, forward-only, and transactional. A database at an
@@ -53,6 +57,9 @@ AGENTCHANNELS_RELAY_COMMAND=/path/to/relay bun test test/behavior.test.ts
 
 ## Configuration
 
+- `AGENTCHANNELS_RELAY_ORIGIN`: the public origin installations dial, such as
+  `https://relay.example.com`. It defaults to `http://` plus the bind address,
+  which is only right without a proxy. Compose requires it.
 - `AGENTCHANNELS_RELAY_BIND`: listen address, default `127.0.0.1:8787`.
 - `AGENTCHANNELS_RELAY_DATABASE`: SQLite path, default `agentchannels-relay.db`.
 - Exactly one of `AGENTCHANNELS_RELAY_ENROLLMENT_TOKEN`,

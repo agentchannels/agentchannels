@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { authenticationPayload, PROTOCOL } from "@agentchannels/protocol";
 import type { Subprocess } from "bun";
 
 const command = process.env.AGENTCHANNELS_RELAY_COMMAND?.split(" ") ?? [
@@ -63,6 +64,7 @@ export function launch(
   database: string,
   port: number,
   enrollment: Enrollment,
+  environment: Record<string, string> = {},
 ): Subprocess<"ignore", "pipe", "pipe"> {
   return Bun.spawn(command, {
     stdin: "ignore",
@@ -73,6 +75,7 @@ export function launch(
       AGENTCHANNELS_RELAY_BIND: `127.0.0.1:${String(port)}`,
       AGENTCHANNELS_RELAY_DATABASE: database,
       ...enrollmentEnvironment(enrollment),
+      ...environment,
     },
   });
 }
@@ -96,7 +99,11 @@ async function waitForListener(
 }
 
 export async function startRelay(
-  options: { database?: string; enrollment?: Enrollment } = {},
+  options: {
+    database?: string;
+    enrollment?: Enrollment;
+    environment?: Record<string, string>;
+  } = {},
 ): Promise<Relay> {
   const database =
     options.database ?? join(temporaryDirectory(), "relay.sqlite3");
@@ -105,6 +112,7 @@ export async function startRelay(
     database,
     port,
     options.enrollment ?? { type: "token", token: ENROLLMENT_TOKEN },
+    options.environment,
   );
   const origin = `http://127.0.0.1:${String(port)}`;
   await waitForListener(origin, child);
@@ -222,7 +230,7 @@ export class Peer {
 export async function connect(
   relay: Relay,
   installation: Installation,
-  protocol = 1,
+  options: { protocol?: number; origin?: string } = {},
 ): Promise<Peer> {
   const peer = await Peer.open(relay);
   const challenge = await peer.next();
@@ -230,9 +238,15 @@ export async function connect(
     throw new Error(`expected a challenge, got ${challenge.type}`);
   peer.send({
     type: "authenticate",
-    protocol,
+    protocol: options.protocol ?? PROTOCOL,
     installationId: installation.installationId,
-    signatureBase64: installation.sign(challenge.nonce),
+    signatureBase64: installation.sign(
+      authenticationPayload({
+        origin: options.origin ?? relay.origin,
+        installationId: installation.installationId,
+        nonce: challenge.nonce,
+      }),
+    ),
   });
   return peer;
 }
@@ -252,7 +266,7 @@ export function syncBindings(
   peer: Peer,
   bindings: readonly { bindingId: string; connector: string }[],
 ): void {
-  peer.send({ type: "sync_bindings", protocol: 1, bindings });
+  peer.send({ type: "sync_bindings", protocol: PROTOCOL, bindings });
 }
 
 export async function routable(

@@ -2,7 +2,8 @@ import { z } from "zod";
 
 import { connectorTypeSchema, routeIdSchema } from "./identifiers.ts";
 
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
+export const SUPPORTED_PROTOCOLS = { min: PROTOCOL, max: PROTOCOL } as const;
 
 const protocol = z.literal(PROTOCOL);
 
@@ -29,6 +30,9 @@ export const relayToLocalMessageSchema = z.discriminatedUnion("type", [
     protocol,
     code: z.string(),
     message: z.string(),
+    supported: z
+      .object({ min: z.number().int(), max: z.number().int() })
+      .optional(),
   }),
 ]);
 

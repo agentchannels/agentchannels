@@ -7,6 +7,7 @@ export type EnrollmentPolicy =
   | Readonly<{ type: "open" }>;
 
 export type RelayConfig = Readonly<{
+  origin: string;
   hostname: string;
   port: number;
   databasePath: string;
@@ -67,9 +68,24 @@ function readTokenFile(path: string): Buffer {
   }
 }
 
+function canonicalOrigin(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "http:" || url.protocol === "https:")
+      return url.origin;
+  } catch {}
+  throw new ConfigurationError(
+    `AGENTCHANNELS_RELAY_ORIGIN must be an HTTP or HTTPS origin, got ${value}.`,
+  );
+}
+
 export function configFromEnvironment(environment: Environment): RelayConfig {
+  const bind = environment.AGENTCHANNELS_RELAY_BIND ?? "127.0.0.1:8787";
   return {
-    ...parseBind(environment.AGENTCHANNELS_RELAY_BIND ?? "127.0.0.1:8787"),
+    origin: canonicalOrigin(
+      environment.AGENTCHANNELS_RELAY_ORIGIN ?? `http://${bind}`,
+    ),
+    ...parseBind(bind),
     databasePath:
       environment.AGENTCHANNELS_RELAY_DATABASE ?? "agentchannels-relay.db",
     enrollment: enrollmentPolicy(environment),

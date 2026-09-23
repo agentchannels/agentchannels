@@ -2,6 +2,7 @@ import { AgentChannelsError, internalError } from "../errors.ts";
 
 import type { Binding } from "../model.ts";
 import {
+  authenticationPayload,
   type LocalToRelayMessage,
   PROTOCOL,
   type RelayToLocalMessage,
@@ -42,6 +43,16 @@ export class RelayRejectedError extends AgentChannelsError {
     );
     this.name = "RelayRejectedError";
   }
+}
+
+function rejectionMessage(
+  error: Extract<RelayToLocalMessage, { type: "error" }>,
+): string {
+  if (error.code !== "unsupported_protocol" || error.supported === undefined)
+    return `Relay ${error.code}: ${error.message}`;
+  const { min, max } = error.supported;
+  const range = min === max ? String(min) : `${String(min)}-${String(max)}`;
+  return `The relay speaks protocol ${range} and this AgentChannels speaks protocol ${String(PROTOCOL)}. Install the AgentChannels release that matches the relay.`;
 }
 
 export class RelayClient {
@@ -173,8 +184,12 @@ export class RelayClient {
           type: "authenticate",
           protocol: PROTOCOL,
           installationId: identity.installationId,
-          signatureBase64: await this.options.identity.signChallenge(
-            message.nonce,
+          signatureBase64: await this.options.identity.sign(
+            authenticationPayload({
+              origin: this.options.endpoints.origin,
+              installationId: identity.installationId,
+              nonce: message.nonce,
+            }),
           ),
         });
         return false;
@@ -197,9 +212,7 @@ export class RelayClient {
         return false;
       }
       case "error":
-        throw new RelayRejectedError(
-          `Relay ${message.code}: ${message.message}`,
-        );
+        throw new RelayRejectedError(rejectionMessage(message));
     }
   }
 

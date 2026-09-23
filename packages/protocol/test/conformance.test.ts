@@ -2,10 +2,12 @@ import { describe, expect, it } from "bun:test";
 import { z } from "zod";
 
 import {
+  authenticationPayload,
   localToRelayMessageSchema,
+  PROTOCOL,
   relayToLocalMessageSchema,
 } from "../src/index.ts";
-import v1 from "./v1.json" with { type: "json" };
+import v2 from "./v2.json" with { type: "json" };
 
 const fixture = z
   .object({
@@ -20,11 +22,11 @@ const fixture = z
       z.object({ errorCode: z.string(), message: z.unknown() }),
     ),
   })
-  .parse(v1);
+  .parse(v2);
 
-describe("protocol 1 conformance fixture", () => {
+describe("protocol 2 conformance fixture", () => {
   it("accepts every Relay-to-local fixture message", () => {
-    expect(fixture.protocol).toBe(1);
+    expect(fixture.protocol).toBe(PROTOCOL);
     for (const entry of fixture.accepted.filter(
       ({ direction }) => direction === "relayToLocal",
     )) {
@@ -53,5 +55,25 @@ describe("protocol 1 conformance fixture", () => {
     expect(fixture.rejected.map(({ errorCode }) => errorCode)).toContain(
       "unsupported_protocol",
     );
+  });
+});
+
+describe("authenticationPayload", () => {
+  it("binds the signature to the relay origin, the installation, and the nonce", () => {
+    const payload = authenticationPayload({
+      origin: "https://relay.example.com/",
+      installationId: "in_one",
+      nonce: "nonce-value",
+    });
+    expect(payload).toBe(
+      "agentchannels-relay-auth:v2\nhttps://relay.example.com\nin_one\nnonce-value",
+    );
+    expect(
+      authenticationPayload({
+        origin: "https://other.example.com",
+        installationId: "in_one",
+        nonce: "nonce-value",
+      }),
+    ).not.toBe(payload);
   });
 });

@@ -120,7 +120,7 @@ export class InstallationIdentityService {
     return identity;
   }
 
-  public async signChallenge(nonce: string): Promise<string> {
+  public async sign(message: string): Promise<string> {
     const encoded = await this.credentials.get(installationPrivateKey);
     if (encoded === null)
       throw invalidState(
@@ -132,7 +132,7 @@ export class InstallationIdentityService {
       format: "der",
       type: "pkcs8",
     });
-    return sign(null, Buffer.from(nonce, "utf8"), key).toString("base64");
+    return sign(null, Buffer.from(message, "utf8"), key).toString("base64");
   }
 }
 

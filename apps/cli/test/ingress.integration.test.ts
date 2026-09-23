@@ -1,3 +1,4 @@
+import { PROTOCOL } from "@agentchannels/protocol";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -141,7 +142,7 @@ function webhook(
 ): RelayWebhook {
   return {
     type: "webhook",
-    protocol: 1,
+    protocol: PROTOCOL,
     requestId,
     bindingId,
     connector: "slack",

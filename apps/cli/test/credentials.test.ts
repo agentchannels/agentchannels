@@ -118,7 +118,7 @@ describe("CredentialStore contract", () => {
     const rawPublicKey = Buffer.from(identity.publicKeyBase64, "base64");
     expect(rawPublicKey).toHaveLength(32);
     const signature = Buffer.from(
-      await identities.signChallenge("relay-nonce"),
+      await identities.sign("relay-nonce"),
       "base64",
     );
     const publicKey = createPublicKey({
