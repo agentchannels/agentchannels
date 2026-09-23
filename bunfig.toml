@@ -12,6 +12,3 @@ minimumReleaseAgeExcludes = [
   "@anthropic-ai/claude-agent-sdk-win32-arm64",
   "@anthropic-ai/claude-agent-sdk-win32-x64",
 ]
-
-[test]
-timeout = 20000

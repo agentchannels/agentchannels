@@ -1,12 +1,11 @@
-import WebSocket, { type RawData } from "ws";
-
 import { AgentChannelsError, internalError } from "../errors.ts";
 
 import type { Binding } from "../model.ts";
 import {
-  relayToLocalMessageSchema,
   type LocalToRelayMessage,
+  PROTOCOL,
   type RelayToLocalMessage,
+  relayToLocalMessageSchema,
 } from "@agentchannels/protocol";
 import type { InstallationIdentityService } from "../security/identity.ts";
 import type { RelayEndpoints } from "../relay/origin.ts";
@@ -26,10 +25,10 @@ export type RelayClientOptions = {
   onStateChange?(connected: boolean): void;
 };
 
-function websocketText(data: RawData): string {
-  if (Array.isArray(data)) return Buffer.concat(data).toString("utf8");
+function messageText(data: unknown): string {
+  if (typeof data === "string") return data;
   if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
-  return data.toString("utf8");
+  return "";
 }
 
 /** The Relay refused this installation; reconnecting cannot change the outcome. */
@@ -92,7 +91,7 @@ export class RelayClient {
     try {
       this.send(socket, {
         type: "sync_bindings",
-        protocol: 1,
+        protocol: PROTOCOL,
         bindings: this.options
           .listBindings()
           .map(({ id, connector }) => ({ bindingId: id, connector })),
@@ -110,11 +109,12 @@ export class RelayClient {
   private connectOnce(): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(this.options.endpoints.websocketUrl);
+      socket.binaryType = "arraybuffer";
       this.socket = socket;
       let authenticated = false;
 
-      socket.on("message", (data) => {
-        void this.handleMessage(socket, websocketText(data)).then(
+      socket.addEventListener("message", (event) => {
+        void this.handleMessage(socket, messageText(event.data)).then(
           (didAuthenticate) => {
             if (didAuthenticate) authenticated = true;
           },
@@ -124,18 +124,26 @@ export class RelayClient {
           },
         );
       });
-      socket.once("error", (error) => reject(error));
-      socket.once("close", () => {
-        this.authenticated = false;
-        this.options.onStateChange?.(false);
-        if (!authenticated && !this.stopping)
-          reject(
-            new RelayRejectedError(
-              "Relay closed the connection before authentication completed.",
-            ),
-          );
-        else resolve();
-      });
+      socket.addEventListener(
+        "error",
+        () => reject(new Error("Relay connection failed.")),
+        { once: true },
+      );
+      socket.addEventListener(
+        "close",
+        () => {
+          this.authenticated = false;
+          this.options.onStateChange?.(false);
+          if (!authenticated && !this.stopping)
+            reject(
+              new RelayRejectedError(
+                "Relay closed the connection before authentication completed.",
+              ),
+            );
+          else resolve();
+        },
+        { once: true },
+      );
     });
   }
 
@@ -163,7 +171,7 @@ export class RelayClient {
         const identity = await this.options.identity.getOrCreate();
         this.send(socket, {
           type: "authenticate",
-          protocol: 1,
+          protocol: PROTOCOL,
           installationId: identity.installationId,
           signatureBase64: await this.options.identity.signChallenge(
             message.nonce,
@@ -180,7 +188,7 @@ export class RelayClient {
         const response = await this.options.handleWebhook(message);
         this.send(socket, {
           type: "webhook_response",
-          protocol: 1,
+          protocol: PROTOCOL,
           requestId: message.requestId,
           status: response.status,
           headers: response.headers ?? {},

@@ -136,10 +136,60 @@
                   {
                     "group": [
                       "**/apps/**",
+                      "**/cli/src/**",
+                      "**/relay/src/**",
                       "agentchannels",
-                      "agentchannels/**"
+                      "agentchannels-relay"
                     ],
                     "message": "The protocol is shared by both apps and must not depend on either."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/relay/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**/cli/src/**",
+                      "**/apps/cli/**",
+                      "agentchannels"
+                    ],
+                    "message": "The relay is transport only. It must not depend on the CLI, its connectors, or its engine."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/cli/src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**/relay/src/**",
+                      "**/apps/relay/**",
+                      "agentchannels-relay"
+                    ],
+                    "message": "The CLI talks to the relay over the wire protocol, never through its code."
                   }
                 ]
               }

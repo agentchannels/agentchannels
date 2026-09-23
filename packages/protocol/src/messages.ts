@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { connectorTypeSchema } from "./identifiers.ts";
+import { connectorTypeSchema, routeIdSchema } from "./identifiers.ts";
 
 export const PROTOCOL = 1;
 
@@ -17,7 +17,7 @@ export const relayToLocalMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("webhook"),
     protocol,
     requestId: z.string().min(1),
-    bindingId: z.string().min(1),
+    bindingId: routeIdSchema,
     connector: connectorTypeSchema,
     receivedAt: z.iso.datetime(),
     expiresAt: z.iso.datetime(),
@@ -36,7 +36,7 @@ export const localToRelayMessageSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("authenticate"),
     protocol,
-    installationId: z.string().min(1),
+    installationId: routeIdSchema,
     signatureBase64: z.string().min(1),
   }),
   z.object({
@@ -44,7 +44,7 @@ export const localToRelayMessageSchema = z.discriminatedUnion("type", [
     protocol,
     bindings: z.array(
       z.object({
-        bindingId: z.string().min(1),
+        bindingId: routeIdSchema,
         connector: connectorTypeSchema,
       }),
     ),

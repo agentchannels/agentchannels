@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -117,6 +118,21 @@ export function deliveryMessage(
     body: "done",
     ...overrides,
   };
+}
+
+export function freePort(): Promise<number> {
+  return new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() => {
+        if (typeof address === "object" && address !== null)
+          resolvePort(address.port);
+        else reject(new Error("no port assigned"));
+      });
+    });
+  });
 }
 
 let compiled: string | undefined;
