@@ -15,98 +15,21 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
-
-      # Development runs TypeScript sources directly, which needs Node's built-in
-      # type stripping. The published package ships compiled JavaScript and is
-      # smoke-tested separately against the engines floor.
-      - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Verify repository
-        run: pnpm check
-
-      - name: Verify source-checkout first run
-        run: |
-          root=$(mktemp -d)
-          rm -rf dist
-          git init --initial-branch main "$root/repository"
-          git -C "$root/repository" \
-            -c user.name='AgentChannels CI' \
-            -c user.email='ci@example.invalid' \
-            commit --allow-empty -m initial
-          pnpm --silent start -- --help > "$root/help.txt"
-          grep -q '^Usage: agentchannels' "$root/help.txt"
-          pnpm --silent start -- init --home "$root/home" \
-            --cwd "$root/repository" --json > "$root/init.json"
-          INIT_JSON="$root/init.json" node --input-type=module -e \
-            'import { readFile } from "node:fs/promises"; JSON.parse(await readFile(process.env.INIT_JSON, "utf8"));'
-
-      - name: Inspect package contents
-        run: pnpm pack --dry-run
-
-      # The previous step deletes dist/ to prove the source path needs no build,
-      # so the tarball must be built here rather than inheriting earlier state.
-      - name: Build the release tarball
-        run: |
-          pnpm build
-          mkdir -p .ci/package
-          pnpm pack --pack-destination .ci/package
-          tarball=$(find .ci/package -maxdepth 1 -name '*.tgz' -print -quit)
-          tar -tzf "$tarball" | grep -qx 'package/dist/cli.js'
-          tar -tzf "$tarball" | grep -qx 'package/dist/index.js'
-
-      - name: Upload the release tarball
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: package-tarball
-          path: .ci/package/*.tgz
-          retention-days: 1
-
-  package-smoke:
-    needs: check
-    runs-on: ubuntu-latest
     strategy:
       matrix:
-        # The lowest and highest Node versions the published package claims to support.
-        node-version: [22, 24]
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: pnpm
+          bun-version-file: package.json
 
-      - name: Download the release tarball
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: package-tarball
-          path: .ci/package
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
-      - name: Smoke-test the isolated package
-        run: |
-          mkdir -p .ci/smoke
-          tarball=$(find .ci/package -maxdepth 1 -name '*.tgz' -print -quit)
-          test -n "$tarball"
-          pnpm --dir .ci/smoke init --bare
-          pnpm --dir .ci/smoke add --save-exact "$PWD/$tarball"
-          node scripts/first-run-smoke.mjs \
-            "$PWD/.ci/smoke/node_modules/.bin/agentchannels"
+      - name: Verify workspace
+        run: bun run check

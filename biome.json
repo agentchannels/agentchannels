@@ -12,7 +12,7 @@
       "!!**/dist",
       "!!**/coverage",
       "!!**/node_modules",
-      "!!pnpm-lock.yaml"
+      "!!bun.lock"
     ]
   },
   "formatter": {
@@ -55,7 +55,7 @@
   },
   "overrides": [
     {
-      "includes": ["src/model.ts"],
+      "includes": ["apps/cli/src/model.ts"],
       "linter": {
         "rules": {
           "style": {
@@ -75,7 +75,7 @@
       }
     },
     {
-      "includes": ["src/connectors/**", "src/runtimes/**"],
+      "includes": ["apps/cli/src/connectors/**", "apps/cli/src/runtimes/**"],
       "linter": {
         "rules": {
           "style": {
@@ -100,7 +100,7 @@
       }
     },
     {
-      "includes": ["src/engine/**"],
+      "includes": ["apps/cli/src/engine/**"],
       "linter": {
         "rules": {
           "style": {
