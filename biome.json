@@ -12,7 +12,7 @@
       "!!**/dist",
       "!!**/coverage",
       "!!**/node_modules",
-      "!!pnpm-lock.yaml"
+      "!!bun.lock"
     ]
   },
   "formatter": {
@@ -55,7 +55,7 @@
   },
   "overrides": [
     {
-      "includes": ["src/model.ts"],
+      "includes": ["apps/cli/src/model.ts"],
       "linter": {
         "rules": {
           "style": {
@@ -75,7 +75,7 @@
       }
     },
     {
-      "includes": ["src/connectors/**", "src/runtimes/**"],
+      "includes": ["apps/cli/src/connectors/**", "apps/cli/src/runtimes/**"],
       "linter": {
         "rules": {
           "style": {
@@ -100,7 +100,7 @@
       }
     },
     {
-      "includes": ["src/engine/**"],
+      "includes": ["apps/cli/src/engine/**"],
       "linter": {
         "rules": {
           "style": {
@@ -116,6 +116,80 @@
                       "**/cli/**"
                     ],
                     "message": "The engine must not name a concrete connector or runtime. Use the contract."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/protocol/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**/apps/**",
+                      "**/cli/src/**",
+                      "**/relay/src/**",
+                      "agentchannels",
+                      "agentchannels-relay"
+                    ],
+                    "message": "The protocol is shared by both apps and must not depend on either."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/relay/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**/cli/src/**",
+                      "**/apps/cli/**",
+                      "agentchannels"
+                    ],
+                    "message": "The relay is transport only. It must not depend on the CLI, its connectors, or its engine."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/cli/src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**/relay/src/**",
+                      "**/apps/relay/**",
+                      "agentchannels-relay"
+                    ],
+                    "message": "The CLI talks to the relay over the wire protocol, never through its code."
                   }
                 ]
               }

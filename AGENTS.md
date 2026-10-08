@@ -1,120 +1,66 @@
 # AgentChannels contributor instructions
 
-## Purpose and boundary
+AgentChannels lets people use an existing local Claude Code environment from
+Slack and Linear. This repository holds every part of it:
 
-This repository is the user-installed AgentChannels product: its CLI, local daemon, SQLite state, Git worktrees, Claude runtime adapter, and Slack/Linear connector semantics. The separate `agentchannels-relay` repository is transport only.
+| Path | What it is | Ships as |
+|---|---|---|
+| `apps/cli` | The CLI, daemon, connectors, and runtime adapter | A compiled binary per platform |
+| `apps/relay` | The transport-only webhook relay | A container image |
+| `packages/protocol` | The wire protocol both apps speak | Source, imported by both |
 
-Use the existing TypeScript, Node.js 22+, and pnpm toolchain.
+Read the `AGENTS.md` inside an app before changing it.
 
-## Commands
+## Toolchain
 
-```sh
-pnpm install --frozen-lockfile
-pnpm dev -- status      # run the CLI from source against an isolated .dev/ home
-pnpm dev:daemon         # run the daemon from source, restarting on change
-pnpm format
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm check
-```
-
-Development runs the TypeScript sources directly through Node's built-in type
-stripping, so there is no build step in the edit/run loop and `dist/` can never
-go stale. That requires Node.js 24 locally; the published package ships compiled
-JavaScript and keeps the `engines` floor of Node.js 22, which CI smoke-tests
-against the packed tarball.
-
-Two consequences are enforced rather than documented: `tsconfig.json` sets
-`erasableSyntaxOnly`, so TypeScript-only runtime syntax such as parameter
-properties will not compile, and relative imports carry a `.ts` extension that
-`rewriteRelativeImportExtensions` converts on emit.
-
-`pnpm dev` points `AGENTCHANNELS_HOME` at a gitignored `.dev/` directory. That
-also selects a separate operating-system keyring namespace, so development and
-tests can never read or delete the operator's real installation secrets.
-
-## Required invariants
-
-- Keep the core `Agent`, `Binding`, `Session`, and `Interaction` model runtime-neutral. Claude-specific types and behavior belong in the runtime adapter.
-- Connector credentials and private installation keys belong in the operating-system credential store. Never write them to SQLite or logs.
-- Derive the whole installation namespace, including the credential-store service name, from one product home. `--home` must isolate secrets as completely as it isolates SQLite.
-- Treat Session execution, channel delivery, and relay transport as independent failure domains. A delivery failure must not turn successful execution into a failed Session.
-- Answer a forwarded webhook from local state only. The Relay drops an event whose local answer misses its response budget and never retries, so credential-store reads, provider token refreshes, and worktree creation belong off that path.
-- Acknowledge an accepted Session on the channel before creating its worktree. Providers expect a first activity within seconds of the originating event.
-- Create Git Session worktrees from the repository's current `HEAD`. Never copy the operator's uncommitted working tree into a Session.
-- Delete only worktrees that AgentChannels owns and has verified are clean. Preserve dirty or unowned worktrees.
-- New runtime permission decisions are operator-only. Shared users may work in Sessions but may not expand runtime authority.
-- A permission reply the runtime cannot read must leave the interaction pending and ask again. Settling it as a denial tells the operator nothing and looks identical to being ignored.
-- Agent-scoped runtime state is opaque outside the runtime that wrote it. A Claude permission rule has no counterpart in another runtime, so the store, the engine, and the connectors persist and pass the blob without reading it.
-- Never pass `settingSources`, `env`, or `mcpServers` to the Claude SDK. Omitting them is what makes a Session inherit the operator's real CLAUDE.md, skills, MCP servers, and secrets, and one added key would end that silently. `settings` is a separate additive layer and is the one exception.
-- Verify Slack and Linear signatures locally from the original raw request body and headers before dispatching work.
-- Persist follow-ups that arrive during an active runtime turn and deliver them in order after that turn. Do not steer the active turn implicitly.
-- Preserve crash recovery metadata and require an intentional follow-up before resuming interrupted work.
-- Keep one canonical Relay HTTP(S) origin per installation. Derive enrollment, webhook, and WebSocket endpoints with URL semantics; never add transient command or environment overrides.
-- Enroll a replacement Relay before persisting a cutover, preserve all local state, and require Binding reconfiguration acknowledgment. Never fall back to hosted implicitly or hot-reload a running daemon.
-- Keep schema migrations numbered, forward-only, and transactional. Refuse newer schemas and create an operator-only SQLite backup before every persistent migration; rollback restores a backup and never runs a down-migration.
-- Suspend foreign-key enforcement while migrating and verify `foreign_key_check` before committing. A migration that rebuilds a table drops the original, and with enforcement on that fires `ON DELETE CASCADE` and silently removes dependent rows.
-- Connector and runtime identifiers are opaque. Constrain their shape (`^[a-z][a-z0-9_-]{0,31}$`), never their value, in types, SQLite, and the wire protocol alike. Adding a provider or a runtime must be one new file, not a coordinated release.
-- Enrollment authorization is request-only input. Never accept it as a normal argument or persist it in SQLite, the credential store, logs, or output.
-
-## Structure
-
-Three directories are extension points and share one shape: a contract plus one
-file per case. `src/connectors` holds channel providers, `src/runtimes` holds
-agent runtimes, and `src/service` holds background-service platforms. Adding a
-case means adding a file there and nothing else.
-
-`src/model.ts` is the leaf of the dependency graph and imports nothing.
-`src/engine` orchestrates Sessions and knows only contracts, never a concrete
-provider or runtime. `src/store` owns SQLite, `src/relay` owns remote transport,
-`src/cli` owns the terminal, and `src/daemon.ts` is the composition root.
-
-These directions are enforced by `noRestrictedImports` in `biome.json` rather
-than by convention, because the one invariant that was documented in prose alone
-is the one that had drifted.
-
-`src/index.ts` is the only barrel. Everywhere else, import the module that owns
-the symbol so the dependency graph stays legible.
-
-## Compatibility surfaces
-
-Treat these as public compatibility boundaries:
-
-- CLI commands, flags, exit behavior, and `--json` output
-- SQLite migrations and persisted status values
-- runtime and connector interfaces
-- Slack/Linear webhook parsing and delivery payloads
-- protocol version and camelCase messages under `src/protocol`
-- the connector and runtime identifier shape, which the Relay validates identically
-
-Any protocol change must be coordinated with `agentchannels-relay` and covered in both repositories. Do not make one side accept a wire shape the other side cannot produce or consume.
-
-Release notes must state the component version, supported protocol, schema impact,
-and rollback requirements. Publication compatibility uses an exact candidate
-Relay digest plus every available exact stable counterpart; never treat a
-missing artifact as a passed pairing.
-
-## Testing and completion
-
-Run focused tests first for changed behavior, for example:
+Bun runs, tests, and compiles everything. There is no build step in the
+edit-run loop; `bun` executes TypeScript directly.
 
 ```sh
-pnpm vitest run test/worktree.test.ts
-pnpm vitest run test/product.integration.test.ts
+bun install --frozen-lockfile
+bun run check
+bun run format
 ```
 
-Shared temporary homes, Git repositories, and in-memory credential stores live in
-`test/helpers/fixtures.ts`. Build new fixtures there rather than in a suite, so
-suites cannot drift on whether a repository has a commit or a home is isolated.
+`bun run check` runs Biome, type checking, every workspace's tests, and both
+compiled builds. Run it before claiming completion.
 
-Behavior changes should extend the closest focused test. Security, recovery, ordering, worktree, or delivery changes require a regression test at that invariant. Connector and runtime test doubles are appropriate only at external boundaries; use real SQLite and Git where the existing tests do.
+Code carries no comments. Names and structure carry meaning; invariants live in
+`AGENTS.md` files and test names. TypeScript is strict, `any` is not used, and
+external input is parsed through a schema before it is trusted.
 
-Before claiming completion, run the full repository gate:
+## Boundaries
 
-```sh
-pnpm check
-```
+The relay's ignorance is a product promise: it cannot read, keep, or act on what
+passes through it. Separate repositories used to guarantee that. Now
+`noRestrictedImports` in `biome.json` does:
 
-This runs Biome CI checks, TypeScript type checking, tests, and the production build.
+- `apps/relay` must not import `apps/cli`.
+- `apps/cli` must not import `apps/relay`.
+- `packages/protocol` must not import either app.
+
+The apps meet only at `packages/protocol`.
+
+## Changing the protocol
+
+A protocol change is one pull request that edits `packages/protocol`, both apps,
+and the conformance fixture in `packages/protocol/test`. It is covered by the
+fixture, by the relay's black-box suite in `apps/relay/test/behavior.test.ts`,
+and by the CLI's end-to-end test against a real relay process in
+`apps/cli/test/relay-roundtrip.integration.test.ts`.
+
+The two apps release on separate tracks, so versions are always skewed: a CLI
+installed last month talks to today's relay. The protocol version is what binds
+them. The relay reports the versions it supports in `unsupported_protocol`, and
+`deploy-relay` refuses to deploy a relay that no longer speaks the last released
+CLI's protocol.
+
+## Releases
+
+- CLI: push a `cli-vX.Y.Z` tag matching `apps/cli/package.json`.
+  `release-cli.yml` compiles the binary natively on each platform and publishes a
+  GitHub release with checksums.
+- Relay: every merge to `main` that touches the relay or the protocol runs
+  `deploy-relay.yml`, which verifies the hardened container and pushes the image.
+  The version tag is pushed once and never overwritten; `apps/relay/compose.yml`
+  pins it.

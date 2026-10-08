@@ -1,0 +1,156 @@
+{
+  "protocol": 2,
+  "accepted": [
+    {
+      "direction": "relayToLocal",
+      "message": {
+        "type": "challenge",
+        "protocol": 2,
+        "nonce": "0123456789abcdef0123456789abcdef"
+      }
+    },
+    {
+      "direction": "relayToLocal",
+      "message": {
+        "type": "authenticated",
+        "protocol": 2
+      }
+    },
+    {
+      "direction": "relayToLocal",
+      "message": {
+        "type": "webhook",
+        "protocol": 2,
+        "requestId": "request-1",
+        "bindingId": "binding-1",
+        "connector": "slack",
+        "receivedAt": "2026-01-01T00:00:00.000Z",
+        "expiresAt": "2026-01-01T00:00:02.500Z",
+        "headers": {
+          "x-test": "1"
+        },
+        "rawBodyBase64": "eA=="
+      }
+    },
+    {
+      "direction": "relayToLocal",
+      "message": {
+        "type": "error",
+        "protocol": 2,
+        "code": "unsupported_protocol",
+        "message": "protocol 1 is not supported",
+        "supported": {
+          "min": 2,
+          "max": 2
+        }
+      }
+    },
+    {
+      "direction": "localToRelay",
+      "message": {
+        "type": "authenticate",
+        "protocol": 2,
+        "installationId": "installation-1",
+        "signatureBase64": "c2lnbmF0dXJl"
+      }
+    },
+    {
+      "direction": "localToRelay",
+      "message": {
+        "type": "sync_bindings",
+        "protocol": 2,
+        "bindings": [
+          {
+            "bindingId": "binding-1",
+            "connector": "slack"
+          }
+        ]
+      }
+    },
+    {
+      "direction": "localToRelay",
+      "message": {
+        "type": "webhook_response",
+        "protocol": 2,
+        "requestId": "request-1",
+        "status": 202,
+        "headers": {
+          "x-result": "accepted"
+        },
+        "body": "accepted"
+      }
+    },
+    {
+      "direction": "relayToLocal",
+      "message": {
+        "type": "webhook",
+        "protocol": 2,
+        "requestId": "request-2",
+        "bindingId": "binding-2",
+        "connector": "example",
+        "receivedAt": "2026-01-01T00:00:00.000Z",
+        "expiresAt": "2026-01-01T00:00:02.500Z",
+        "headers": {
+          "x-test": "1"
+        },
+        "rawBodyBase64": "eA=="
+      }
+    },
+    {
+      "direction": "localToRelay",
+      "message": {
+        "type": "sync_bindings",
+        "protocol": 2,
+        "bindings": [
+          {
+            "bindingId": "binding-2",
+            "connector": "example"
+          }
+        ]
+      }
+    }
+  ],
+  "rejected": [
+    {
+      "direction": "localToRelay",
+      "errorCode": "unsupported_protocol",
+      "message": {
+        "type": "authenticate",
+        "protocol": 1,
+        "installationId": "installation-1",
+        "signatureBase64": "c2lnbmF0dXJl"
+      }
+    },
+    {
+      "direction": "localToRelay",
+      "errorCode": "unsupported_protocol",
+      "message": {
+        "type": "sync_bindings",
+        "protocol": 1,
+        "bindings": []
+      }
+    },
+    {
+      "direction": "localToRelay",
+      "errorCode": "invalid_message",
+      "message": {
+        "type": "unknown",
+        "protocol": 2
+      }
+    },
+    {
+      "direction": "localToRelay",
+      "errorCode": "invalid_message",
+      "message": {
+        "type": "sync_bindings",
+        "protocol": 2,
+        "bindings": [
+          {
+            "bindingId": "binding-3",
+            "connector": "Not/A Connector"
+          }
+        ]
+      }
+    }
+  ]
+}
